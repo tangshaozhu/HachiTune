@@ -739,6 +739,14 @@ void Project::composeGlobalWaveform()
 
                 const float base = dst[globalIdx];
                 const float synth = synthWave[static_cast<size_t>(synthIdx)];
+                
+                // CRITICAL FIX: Skip overlay if synth is near-zero to avoid
+                // accidentally silencing regions that should use base audio.
+                // This prevents stale/empty synthWaveforms from corrupting
+                // the global waveform when notes overlap in time.
+                if (std::abs(synth) < 1e-6f)
+                    continue;
+                
                 dst[globalIdx] = base + env * (synth - base);
             }
         }

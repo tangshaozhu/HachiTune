@@ -478,7 +478,31 @@ void IncrementalSynthesizer::synthesizeRegion(ProgressCallback onProgress,
               }
             }
 
+
             note.setSynthWaveform(std::move(noteSynth), leftMargin);
+            
+            // VALIDATION CHECK: If the generated synthWaveform contains significant
+            // zero regions, discard it to avoid phase discontinuities in composeGlobalWaveform.
+            // It's better to use original audio than corrupted synth audio.
+            if (noteSamples > 0 && leftMargin >= 0 && (leftMargin + noteSamples) <= static_cast<int>(noteSynth.size())) {
+              int zeroCount = 0;
+              const int checkStart = leftMargin;  // Only check the body, not margins
+              const int checkEnd = leftMargin + noteSamples;
+              
+              for (int i = checkStart; i < checkEnd; ++i) {
+                if (std::abs(noteSynth[static_cast<size_t>(i)]) < 1e-6f) {
+                  zeroCount++;
+                }
+              }
+              
+              // If more than 5% of the body is zero, discard the synthWaveform
+              const float zeroRatio = static_cast<float>(zeroCount) / static_cast<float>(noteSamples);
+              if (zeroRatio > 0.05f) {
+                DBG("Discarding synthWaveform for note [" << noteStart << "-" << noteEnd 
+                   << "] due to " << (zeroRatio * 100) << "% zero samples");
+                note.clearSynthWaveform();  // This will make composeGlobalWaveform skip it
+              }
+            }
           }
 
           // Compose the global waveform from per-note synthWaveforms
