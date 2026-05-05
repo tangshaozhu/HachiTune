@@ -39,9 +39,9 @@ IncrementalSynthesizer::computeSynthesisRange(int dirtyStart, int dirtyEnd) {
   dirtyEnd = std::min(totalFrames, dirtyEnd);
 
   // Reduced gap bridging to minimize synthesis scope
-  constexpr int kGapBridgeFrames = 8;  // Reduced from 16 to avoid chaining too many notes
+  constexpr int kGapBridgeFrames = 5;  // Reduced from 16 to avoid chaining too many notes
   constexpr int kMinSearchRangeFrames = 4;   // Minimum search range for low-energy boundary
-  constexpr int kMaxSearchRangeFrames = 32;  // Reduced from 64 to limit expansion
+  constexpr int kMaxSearchRangeFrames = 16;  // Reduced from 32 to further limit expansion
   
   // Energy threshold for detecting "quiet" boundaries
   // Calculate adaptive threshold based on audio content
@@ -54,7 +54,9 @@ IncrementalSynthesizer::computeSynthesisRange(int dirtyStart, int dirtyEnd) {
     }
     globalRms = std::sqrt(globalRms / static_cast<float>(checkSamples));
   }
-  const float kEnergyThreshold = globalRms * 0.05f; // 5% of global RMS as silence threshold
+  const float kEnergyThreshold = globalRms * 0.20f; // Increased from 0.05 to 0.10 to allow stopping at higher energy boundaries
+  const float kAbsoluteEnergyFloor = 0.005f; // Absolute minimum threshold to avoid being too sensitive in quiet passages
+  const float finalEnergyThreshold = std::max(kEnergyThreshold, kAbsoluteEnergyFloor);
 
   auto isVoiced = [&](int idx) -> bool {
     return idx >= 0 && idx < totalFrames && static_cast<bool>(voicedMask[idx]);
@@ -78,7 +80,40 @@ IncrementalSynthesizer::computeSynthesisRange(int dirtyStart, int dirtyEnd) {
     return std::sqrt(sumSq / static_cast<float>(endSample - startSample));
   };
 
+  // Helper: calculate high-frequency energy ratio
+  // Returns ratio indicating high-freq content (lower = smoother signal)
+  auto calcHighFreqRatio = [&](int frameIdx) -> float {
+    const int sampleIdx = frameIdx * hopSize;
+    const int windowSize = std::min(hopSize, 256);
+    const int startSample = std::max(0, sampleIdx - windowSize / 2);
+    const int endSample = std::min(totalSamples, sampleIdx + windowSize / 2);
+    
+    if (endSample <= startSample + 2)
+      return 0.5f;
+    
+    const float* ptr = originalWaveform.getReadPointer(0);
+    
+    float totalEnergy = 0.0f;
+    float highFreqEnergy = 0.0f;
+    
+    for (int i = startSample + 1; i < endSample; ++i) {
+      float sample = ptr[i];
+      float prevSample = ptr[i - 1];
+      float diff = sample - prevSample;
+      
+      totalEnergy += sample * sample;
+      highFreqEnergy += diff * diff;
+    }
+    
+    if (totalEnergy < 1e-10f)
+      return 0.5f;
+    
+    float ratio = highFreqEnergy / (totalEnergy * 4.0f);
+    return std::min(1.0f, std::max(0.0f, ratio));
+  };
+
   // Helper: find lowest energy position in a search range, but stop at voiced boundaries
+  // Priority: absolute energy minimum > high-frequency energy consideration
   auto findLowEnergyBoundary = [&](int centerFrame, int searchBackward, 
                                     int searchForward, bool stopAtVoiced) -> int {
     const int searchStart = std::max(0, centerFrame - searchBackward);
@@ -86,23 +121,31 @@ IncrementalSynthesizer::computeSynthesisRange(int dirtyStart, int dirtyEnd) {
     
     int bestPos = centerFrame;
     float minEnergy = calcFrameEnergy(centerFrame);
+    float bestHighFreqRatio = calcHighFreqRatio(centerFrame);
     
     for (int f = searchStart; f < searchEnd; ++f) {
-      // If stopping at voiced boundaries, don't cross into voiced regions
       if (stopAtVoiced && isVoiced(f)) {
         break;
       }
       
       const float energy = calcFrameEnergy(f);
+      const float hfRatio = calcHighFreqRatio(f);
+      
       if (energy < minEnergy) {
         minEnergy = energy;
         bestPos = f;
+        bestHighFreqRatio = hfRatio;
+      } else if (energy < finalEnergyThreshold && 
+                 std::abs(energy - minEnergy) < finalEnergyThreshold * 0.3f &&
+                 hfRatio < bestHighFreqRatio * 0.8f) {
+        minEnergy = energy;
+        bestPos = f;
+        bestHighFreqRatio = hfRatio;
       }
     }
     
-    // Only use the boundary if it's sufficiently quiet
-    if (minEnergy > kEnergyThreshold) {
-      return centerFrame; // Fall back to original position if no quiet boundary found
+    if (minEnergy > finalEnergyThreshold) {
+      return centerFrame;
     }
     
     return bestPos;
