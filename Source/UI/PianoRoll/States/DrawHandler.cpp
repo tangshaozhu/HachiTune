@@ -128,6 +128,7 @@ void DrawHandler::commitPitchDrawing() {
   }
 
   // Clear deltaPitch for notes in the edited range so they use the drawn F0
+  // Also mark notes as dirty to ensure synthesis happens
   if (owner_.project && minFrame <= maxFrame) {
     const int maxFrameExclusive = maxFrame + 1;
     auto &notes = owner_.project->getNotes();
@@ -137,6 +138,8 @@ void DrawHandler::commitPitchDrawing() {
         if (note.hasDeltaPitch()) {
           note.setDeltaPitch(std::vector<float>());
         }
+        // 标记音符为脏数据，确保合成器会处理这些音符
+        note.markSynthDirty();
       }
     }
   }
@@ -149,13 +152,29 @@ void DrawHandler::commitPitchDrawing() {
   // Create undo action
   if (owner_.undoManager && owner_.project) {
     auto &audioData = owner_.project->getAudioData();
+    
+    // 捕获当前的回调函数，确保撤销/重做时能正确触发
+    auto onPitchEditFinished = owner_.onPitchEditFinished;
+    
     auto action = std::make_unique<F0EditAction>(
         &audioData.f0, &audioData.deltaPitch, &audioData.voicedMask,
-        drawingEdits, [this](int minFrame, int maxFrame) {
+        drawingEdits, [this, onPitchEditFinished](int minFrame, int maxFrame) {
           if (owner_.project) {
             owner_.project->setF0DirtyRange(minFrame, maxFrame + 1);
-            if (owner_.onPitchEditFinished)
-              owner_.onPitchEditFinished();
+            
+            // 标记相关音符为脏数据，确保音频合成器会处理这些音符
+            const int maxFrameExclusive = maxFrame + 1;
+            auto &notes = owner_.project->getNotes();
+            for (auto &note : notes) {
+              if (note.getEndFrame() > minFrame &&
+                  note.getStartFrame() < maxFrameExclusive) {
+                note.markSynthDirty();
+              }
+            }
+            
+            // 确保回调函数被正确调用
+            if (onPitchEditFinished)
+              onPitchEditFinished();
           }
         });
     owner_.undoManager->addAction(std::move(action));
@@ -168,7 +187,10 @@ void DrawHandler::commitPitchDrawing() {
   activeDrawCurve = nullptr;
   drawCurves.clear();
 
-  // Trigger synthesis
+  // Trigger synthesis - 确保音频合成被触发
+  if (owner_.project && minFrame <= maxFrame) {
+    owner_.project->setF0DirtyRange(minFrame, maxFrame + 1);
+  }
   if (owner_.onPitchEditFinished)
     owner_.onPitchEditFinished();
 }
