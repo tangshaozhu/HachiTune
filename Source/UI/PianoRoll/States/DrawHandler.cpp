@@ -130,14 +130,34 @@ void DrawHandler::commitPitchDrawing() {
   // Clear deltaPitch for notes in the edited range so they use the drawn F0
   // Also mark notes as dirty to ensure synthesis happens
   if (owner_.project && minFrame <= maxFrame) {
+    auto &audioData = owner_.project->getAudioData();
     const int maxFrameExclusive = maxFrame + 1;
+    const int totalFrames = audioData.getNumFrames();
     auto &notes = owner_.project->getNotes();
+    
     for (auto &note : notes) {
       if (note.getEndFrame() > minFrame &&
           note.getStartFrame() < maxFrameExclusive) {
-        if (note.hasDeltaPitch()) {
-          note.setDeltaPitch(std::vector<float>());
+        // Extract per-note deltaPitch from global deltaPitch array
+        const int startFrame = note.getStartFrame();
+        const int endFrame = note.getEndFrame();
+        const int numFrames = endFrame - startFrame;
+        
+        if (numFrames > 0) {
+          std::vector<float> noteDelta(static_cast<size_t>(numFrames));
+          for (int i = 0; i < numFrames; ++i) {
+            const int globalIdx = startFrame + i;
+            if (globalIdx >= 0 && globalIdx < totalFrames) {
+              noteDelta[static_cast<size_t>(i)] = 
+                  audioData.deltaPitch[static_cast<size_t>(globalIdx)];
+            }
+          }
+          
+          // Set both originalDeltaPitch and deltaPitch to preserve the drawn curve
+          note.setOriginalDeltaPitch(noteDelta);
+          note.setDeltaPitch(noteDelta);
         }
+        
         // 标记音符为脏数据，确保合成器会处理这些音符
         note.markSynthDirty();
       }

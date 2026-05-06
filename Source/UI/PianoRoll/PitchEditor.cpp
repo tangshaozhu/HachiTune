@@ -256,20 +256,41 @@ void PitchEditor::endDrawing()
     maxFrame = std::max(maxFrame, e.idx);
   }
 
-  // Clear deltaPitch for notes in edited range
+  // Clear deltaPitch for notes in edited range and mark them dirty
   if (project && minFrame <= maxFrame)
   {
+    auto &audioData = project->getAudioData();
     const int maxFrameExclusive = maxFrame + 1;
+    const int totalFrames = audioData.getNumFrames();
     auto &notes = project->getNotes();
+    
     for (auto &note : notes)
     {
       if (note.getEndFrame() > minFrame &&
           note.getStartFrame() < maxFrameExclusive)
       {
-        if (note.hasDeltaPitch())
-        {
-          note.setDeltaPitch(std::vector<float>());
+        // Extract per-note deltaPitch from global deltaPitch array
+        const int startFrame = note.getStartFrame();
+        const int endFrame = note.getEndFrame();
+        const int numFrames = endFrame - startFrame;
+        
+        if (numFrames > 0) {
+          std::vector<float> noteDelta(static_cast<size_t>(numFrames));
+          for (int i = 0; i < numFrames; ++i) {
+            const int globalIdx = startFrame + i;
+            if (globalIdx >= 0 && globalIdx < totalFrames) {
+              noteDelta[static_cast<size_t>(i)] = 
+                  audioData.deltaPitch[static_cast<size_t>(globalIdx)];
+            }
+          }
+          
+          // Set both originalDeltaPitch and deltaPitch to preserve the drawn curve
+          note.setOriginalDeltaPitch(noteDelta);
+          note.setDeltaPitch(noteDelta);
         }
+        
+        // Mark note as dirty to ensure synthesis happens
+        note.markSynthDirty();
       }
     }
     project->setF0DirtyRange(minFrame, maxFrameExclusive);
@@ -279,12 +300,27 @@ void PitchEditor::endDrawing()
   if (undoManager && project)
   {
     auto &audioData = project->getAudioData();
+    
+    // Capture the callback to ensure it's called correctly during undo/redo
+    auto onPitchEditFinished = this->onPitchEditFinished;
+    
     auto action = std::make_unique<F0EditAction>(
         &audioData.f0, &audioData.deltaPitch, &audioData.voicedMask,
-        drawingEdits, [this](int minFrame, int maxFrame)
+        drawingEdits, [this, onPitchEditFinished](int minFrame, int maxFrame)
         {
           if (project) {
             project->setF0DirtyRange(minFrame, maxFrame + 1);
+            
+            // Mark notes as dirty to ensure synthesis happens after undo/redo
+            const int maxFrameExclusive = maxFrame + 1;
+            auto &notes = project->getNotes();
+            for (auto &note : notes) {
+              if (note.getEndFrame() > minFrame &&
+                  note.getStartFrame() < maxFrameExclusive) {
+                note.markSynthDirty();
+              }
+            }
+            
             if (onPitchEditFinished)
               onPitchEditFinished();
           } });
