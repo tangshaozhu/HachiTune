@@ -1679,7 +1679,9 @@ void PianoRollComponent::drawPitchCurves(juce::Graphics &g)
             (pitchEditor->isDraggingMultiNotes() &&
              std::find(draggedNotes.begin(), draggedNotes.end(), &note) !=
                  draggedNotes.end());
-        const bool applyNoteOffset = !(useLiveBasePreview && isDraggedNote);
+        // During drag preview, basePitch hasn't been updated yet, so we add pitchOffset for preview
+        // After drawing or normal rendering, basePitch already includes pitchOffset from generateForNotes
+        const bool shouldAddPitchOffset = useLiveBasePreview && isDraggedNote;
 
         juce::Path path;
         bool pathStarted = false;
@@ -1690,15 +1692,25 @@ void PianoRollComponent::drawPitchCurves(juce::Graphics &g)
 
         for (int i = startFrame; i < endFrame; ++i)
         {
-          float baseMidi =
-              (i < static_cast<int>(audioData.basePitch.size()))
-                  ? audioData.basePitch[static_cast<size_t>(i)]
-                  : ((i < static_cast<int>(audioData.f0.size()) &&
-                      audioData.f0[static_cast<size_t>(i)] > 0.0f)
-                         ? freqToMidi(audioData.f0[static_cast<size_t>(i)])
-                         : 0.0f);
-          if (applyNoteOffset)
-            baseMidi += note.getPitchOffset();
+          float baseMidi;
+          if (shouldAddPitchOffset)
+          {
+            // During drag preview: use note's original base pitch + current pitchOffset
+            // This avoids double-offset when audioData.basePitch already contains old pitchOffset
+            baseMidi = static_cast<float>(note.getMidiNote()) 
+                     - (note.getTiltLeft() + note.getTiltRight()) / 2.0f
+                     + note.getPitchOffset();
+          }
+          else
+          {
+            // Normal rendering: use audioData.basePitch which already includes pitchOffset
+            baseMidi = (i < static_cast<int>(audioData.basePitch.size()))
+                           ? audioData.basePitch[static_cast<size_t>(i)]
+                           : ((i < static_cast<int>(audioData.f0.size()) &&
+                               audioData.f0[static_cast<size_t>(i)] > 0.0f)
+                                  ? freqToMidi(audioData.f0[static_cast<size_t>(i)])
+                                  : 0.0f);
+          }
 
           float deltaMidi = (i < static_cast<int>(audioData.deltaPitch.size()))
                                 ? audioData.deltaPitch[static_cast<size_t>(i)]
@@ -1814,7 +1826,8 @@ void PianoRollComponent::drawPitchCurves(juce::Graphics &g)
           if (baseMidi > 0.0f)
           {
             float x = framesToSeconds(i) * pixelsPerSecond;
-            float y = midiToY(baseMidi) +
+            float displayMidi = baseMidi + globalOffset;
+            float y = midiToY(displayMidi) +
                       pixelsPerSemitone * 0.5f; // Center in grid cell
 
             if (!basePathStarted)
@@ -3028,10 +3041,26 @@ void PianoRollComponent::updateBasePitchCacheIfNeeded()
       {
         // Generate smoothed base pitch curve (expensive operation, cached)
         // This is only called when notes change, not on every repaint
+        // NOTE: midiNote must include pitchOffset and tilt to match DrawHandler logic
+        std::vector<BasePitchCurve::NoteSegment> noteSegmentsWithOffset;
+        noteSegmentsWithOffset.reserve(noteSegments.size());
+        for (const auto &note : notes)
+        {
+          if (!note.isRest())
+          {
+            BasePitchCurve::NoteSegment seg;
+            seg.startFrame = note.getStartFrame();
+            seg.endFrame = note.getEndFrame();
+            // Include pitchOffset and tilt to match the rendering logic
+            seg.midiNote = static_cast<float>(note.getMidiNote()) 
+                         + note.getPitchOffset()
+                         - (note.getTiltLeft() + note.getTiltRight()) / 2.0f;
+            noteSegmentsWithOffset.push_back(seg);
+          }
+        }
+        
         cachedBasePitch =
-            BasePitchCurve::generateForNotes(noteSegments, totalFrames);
-        cachedNoteCount = currentNoteCount;
-        cachedTotalFrames = totalFrames;
+            BasePitchCurve::generateForNotes(noteSegmentsWithOffset, totalFrames);
         cacheInvalidated = false; // Mark cache as valid
       }
       else

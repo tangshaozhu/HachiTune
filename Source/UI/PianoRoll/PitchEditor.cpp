@@ -1,5 +1,6 @@
 #include "PitchEditor.h"
 #include "../../Utils/ScaleUtils.h"
+#include "../../Utils/BasePitchCurve.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -289,10 +290,118 @@ void PitchEditor::endDrawing()
           note.setDeltaPitch(noteDelta);
         }
         
+        // Adjust pitchOffset to center the drawn F0 curve around the note
+        // Calculate average F0 MIDI value in this note's range
+        float sumF0Midi = 0.0f;
+        int voicedCount = 0;
+        for (int i = 0; i < numFrames; ++i) {
+          const int globalIdx = startFrame + i;
+          if (globalIdx >= 0 && globalIdx < totalFrames) {
+            const float f0Hz = audioData.f0[static_cast<size_t>(globalIdx)];
+            if (f0Hz > 0.0f) {
+              sumF0Midi += freqToMidi(f0Hz);
+              voicedCount++;
+            }
+          }
+        }
+        
+        if (voicedCount > 0) {
+          const float avgF0Midi = sumF0Midi / static_cast<float>(voicedCount);
+          
+          // Calculate current base pitch average for this note
+          float sumBaseMidi = 0.0f;
+          int baseCount = 0;
+          for (int i = 0; i < numFrames; ++i) {
+            const int globalIdx = startFrame + i;
+            if (globalIdx >= 0 && globalIdx < totalFrames && 
+                globalIdx < static_cast<int>(audioData.basePitch.size())) {
+              sumBaseMidi += audioData.basePitch[static_cast<size_t>(globalIdx)];
+              baseCount++;
+            }
+          }
+          
+          if (baseCount > 0) {
+            const float avgBaseMidi = sumBaseMidi / static_cast<float>(baseCount);
+            
+            // Calculate new pitchOffset to center the F0 curve
+            // We want: avgBaseMidi + newPitchOffset ≈ avgF0Midi
+            const float newPitchOffset = avgF0Midi - avgBaseMidi;
+            
+            // Apply the new pitchOffset (clamp to reasonable range)
+            const float kMaxPitchOffset = 24.0f; // ±2 octaves max
+            note.setPitchOffset(std::clamp(newPitchOffset, -kMaxPitchOffset, kMaxPitchOffset));
+          }
+        }
+        
         // Mark note as dirty to ensure synthesis happens
         note.markSynthDirty();
       }
     }
+    
+    // Manually rebuild basePitch with updated pitchOffsets WITHOUT calling composeF0InPlace
+    // This preserves the user-drawn f0 while updating basePitch and deltaPitch
+    {
+      std::vector<BasePitchCurve::NoteSegment> segments;
+      for (const auto &note : notes) {
+        if (note.isRest()) continue;
+        
+        BasePitchCurve::NoteSegment seg;
+        seg.startFrame = note.getStartFrame();
+        seg.endFrame = note.getEndFrame();
+        // Base pitch includes per-note offset and tilt
+        seg.midiNote = note.getMidiNote() + note.getPitchOffset()
+                     - (note.getTiltLeft() + note.getTiltRight()) / 2.0f;
+        segments.push_back(seg);
+      }
+      
+      std::sort(segments.begin(), segments.end(),
+                [](const auto& a, const auto& b) { return a.startFrame < b.startFrame; });
+      
+      if (!segments.empty()) {
+        // Generate new basePitch based on updated pitchOffsets
+        audioData.basePitch = BasePitchCurve::generateForNotes(segments, totalFrames);
+        
+        // Recalculate deltaPitch = f0 - basePitch (keeping f0 unchanged!)
+        for (int i = 0; i < totalFrames; ++i) {
+          const float baseMidi = audioData.basePitch[static_cast<size_t>(i)];
+          const float f0Midi = freqToMidi(audioData.f0[static_cast<size_t>(i)]);
+          audioData.deltaPitch[static_cast<size_t>(i)] = f0Midi - baseMidi;
+        }
+        
+        // Update cached baseF0
+        audioData.baseF0.resize(static_cast<size_t>(totalFrames));
+        for (int i = 0; i < totalFrames; ++i) {
+          audioData.baseF0[static_cast<size_t>(i)] = midiToFreq(audioData.basePitch[static_cast<size_t>(i)]);
+        }
+        
+        // Sync the updated global deltaPitch back to each note's deltaPitch vector
+        // This ensures consistency between global and per-note data sources
+        for (auto &note : notes) {
+          if (note.getEndFrame() > minFrame &&
+              note.getStartFrame() < maxFrameExclusive) {
+            const int startFrame = note.getStartFrame();
+            const int endFrame = note.getEndFrame();
+            const int numFrames = endFrame - startFrame;
+            
+            if (numFrames > 0) {
+              std::vector<float> noteDelta(static_cast<size_t>(numFrames));
+              for (int i = 0; i < numFrames; ++i) {
+                const int globalIdx = startFrame + i;
+                if (globalIdx >= 0 && globalIdx < totalFrames) {
+                  noteDelta[static_cast<size_t>(i)] = 
+                      audioData.deltaPitch[static_cast<size_t>(globalIdx)];
+                }
+              }
+              
+              // Update both originalDeltaPitch and deltaPitch with the recalculated values
+              note.setOriginalDeltaPitch(noteDelta);
+              note.setDeltaPitch(noteDelta);
+            }
+          }
+        }
+      }
+    }
+    
     project->setF0DirtyRange(minFrame, maxFrameExclusive);
   }
 

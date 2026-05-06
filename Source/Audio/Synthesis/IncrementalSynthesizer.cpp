@@ -197,13 +197,6 @@ IncrementalSynthesizer::computeSynthesisRange(int dirtyStart, int dirtyEnd) {
                                            std::max(kMinSearchRangeFrames, fwdGap + 4));
   // Stop at voiced regions to avoid including other notes
   end = findLowEnergyBoundary(end, 0, forwardSearchRange, true);
-
-  DBG("Synthesis range optimized: dirty=[" << dirtyStart << "-" << dirtyEnd 
-     << "] → expanded=[" << start << "-" << end << "]"
-     << " (frames=" << (end - start) << ", backwardSearch=" << backwardSearchRange 
-     << ", forwardSearch=" << forwardSearchRange 
-     << ", energyThreshold=" << kEnergyThreshold << ")");
-
   return {start, end};
 }
 
