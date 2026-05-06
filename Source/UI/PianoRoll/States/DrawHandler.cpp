@@ -128,6 +128,9 @@ void DrawHandler::commitPitchDrawing() {
     maxFrame = std::max(maxFrame, e.idx);
   }
 
+  // Record pitchOffset changes for undo support
+  std::vector<std::pair<int, float>> pitchOffsetChanges;
+
   // Clear deltaPitch for notes in the edited range so they use the drawn F0
   // Also mark notes as dirty to ensure synthesis happens
   if (owner_.project && minFrame <= maxFrame) {
@@ -135,6 +138,7 @@ void DrawHandler::commitPitchDrawing() {
     const int maxFrameExclusive = maxFrame + 1;
     const int totalFrames = audioData.getNumFrames();
     auto &notes = owner_.project->getNotes();
+    int noteIndex = 0;
     
     for (auto &note : notes) {
       if (note.getEndFrame() > minFrame &&
@@ -185,6 +189,10 @@ void DrawHandler::commitPitchDrawing() {
           // Calculate new pitchOffset to center the F0 curve around the note's original base
           // We want: originalBaseMidi + newPitchOffset ≈ avgF0Midi
           const float newPitchOffset = avgF0Midi - originalBaseMidi;
+          
+          // Record old pitchOffset for undo support
+          pitchOffsetChanges.push_back({noteIndex, note.getPitchOffset()});
+          
           // Apply the new pitchOffset (clamp to reasonable range)
           const float kMaxPitchOffset = 24.0f; // ±2 octaves max
           note.setPitchOffset(std::clamp(newPitchOffset, -kMaxPitchOffset, kMaxPitchOffset));
@@ -193,6 +201,8 @@ void DrawHandler::commitPitchDrawing() {
         // 标记音符为脏数据，确保合成器会处理这些音符
         note.markSynthDirty();
       }
+      
+      noteIndex++;
     }
     
     // Manually rebuild basePitch with updated pitchOffsets WITHOUT calling composeF0InPlace
@@ -269,26 +279,101 @@ void DrawHandler::commitPitchDrawing() {
   if (owner_.undoManager && owner_.project) {
     auto &audioData = owner_.project->getAudioData();
     
+    // Capture pitchOffset changes for undo/redo
+    auto capturedPitchOffsetChanges = pitchOffsetChanges;
+    
     // 捕获当前的回调函数，确保撤销/重做时能正确触发
     auto onPitchEditFinished = owner_.onPitchEditFinished;
     
     auto action = std::make_unique<F0EditAction>(
         &audioData.f0, &audioData.deltaPitch, &audioData.voicedMask,
-        drawingEdits, [this, onPitchEditFinished](int minFrame, int maxFrame) {
+        drawingEdits, [this, onPitchEditFinished, capturedPitchOffsetChanges](int minFrame, int maxFrame) {
           if (owner_.project) {
+            // First restore pitchOffset values
+            auto &notes = owner_.project->getNotes();
+            int noteIndex = 0;
+            for (auto &note : notes) {
+              for (const auto &[idx, oldOffset] : capturedPitchOffsetChanges) {
+                if (noteIndex == idx) {
+                  note.setPitchOffset(oldOffset);
+                  break;
+                }
+              }
+              if (!note.isRest()) {
+                noteIndex++;
+              }
+            }
+            
+            // Then rebuild basePitch and deltaPitch with restored pitchOffsets
+            auto &audioData = owner_.project->getAudioData();
+            const int totalFrames = audioData.getNumFrames();
+            const int maxFrameExclusive = minFrame > maxFrame ? minFrame + 1 : maxFrame + 1;
+            
+            std::vector<BasePitchCurve::NoteSegment> segments;
+            for (const auto &note : notes) {
+              if (note.isRest()) continue;
+              
+              BasePitchCurve::NoteSegment seg;
+              seg.startFrame = note.getStartFrame();
+              seg.endFrame = note.getEndFrame();
+              seg.midiNote = static_cast<float>(note.getMidiNote()) 
+                           + note.getPitchOffset()
+                           - (note.getTiltLeft() + note.getTiltRight()) / 2.0f;
+              segments.push_back(seg);
+            }
+            
+            std::sort(segments.begin(), segments.end(),
+                      [](const auto& a, const auto& b) { return a.startFrame < b.startFrame; });
+            
+            if (!segments.empty()) {
+              audioData.basePitch = BasePitchCurve::generateForNotes(segments, totalFrames);
+              
+              // Recalculate deltaPitch = f0 - basePitch
+              for (int i = 0; i < totalFrames; ++i) {
+                const float baseMidi = audioData.basePitch[static_cast<size_t>(i)];
+                const float f0Midi = freqToMidi(audioData.f0[static_cast<size_t>(i)]);
+                audioData.deltaPitch[static_cast<size_t>(i)] = f0Midi - baseMidi;
+              }
+              
+              // Update baseF0
+              audioData.baseF0.resize(static_cast<size_t>(totalFrames));
+              for (int i = 0; i < totalFrames; ++i) {
+                audioData.baseF0[static_cast<size_t>(i)] = midiToFreq(audioData.basePitch[static_cast<size_t>(i)]);
+              }
+              
+              // Sync to note deltaPitch vectors
+              for (auto &note : notes) {
+                if (note.getEndFrame() > minFrame && note.getStartFrame() < maxFrameExclusive) {
+                  const int startFrame = note.getStartFrame();
+                  const int endFrame = note.getEndFrame();
+                  const int numFrames = endFrame - startFrame;
+                  
+                  if (numFrames > 0) {
+                    std::vector<float> noteDelta(static_cast<size_t>(numFrames));
+                    for (int i = 0; i < numFrames; ++i) {
+                      const int globalIdx = startFrame + i;
+                      if (globalIdx >= 0 && globalIdx < totalFrames) {
+                        noteDelta[static_cast<size_t>(i)] = audioData.deltaPitch[static_cast<size_t>(globalIdx)];
+                      }
+                    }
+                    note.setOriginalDeltaPitch(noteDelta);
+                    note.setDeltaPitch(noteDelta);
+                  }
+                }
+              }
+            }
+            
+            // Set F0 dirty range
             owner_.project->setF0DirtyRange(minFrame, maxFrame + 1);
             
-            // 标记相关音符为脏数据，确保音频合成器会处理这些音符
-            const int maxFrameExclusive = maxFrame + 1;
-            auto &notes = owner_.project->getNotes();
+            // Mark notes as dirty
             for (auto &note : notes) {
-              if (note.getEndFrame() > minFrame &&
-                  note.getStartFrame() < maxFrameExclusive) {
+              if (note.getEndFrame() > minFrame && note.getStartFrame() < maxFrameExclusive) {
                 note.markSynthDirty();
               }
             }
             
-            // 确保回调函数被正确调用
+            // Call callback
             if (onPitchEditFinished)
               onPitchEditFinished();
           }
