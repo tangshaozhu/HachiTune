@@ -88,9 +88,10 @@ void PitchEditor::updateNoteDrag(float y)
   if (snapToSemitoneDragEnabled)
     deltaSemitones = std::round(deltaSemitones);
 
-  draggedNote->setPitchOffset(deltaSemitones);
+  // Add the original pitchOffset to maintain the current position
+  draggedNote->setPitchOffset(originalPitchOffset + deltaSemitones);
   draggedNote->markDirty();
-  applyDragBasePreview(deltaSemitones);
+  applyDragBasePreview(originalPitchOffset + deltaSemitones);
 }
 
 void PitchEditor::endNoteDrag()
@@ -654,6 +655,7 @@ void PitchEditor::startMultiNoteDrag(const std::vector<Note *> &notes,
 
   draggedNotes = notes;
   originalMidiNotes.clear();
+  originalPitchOffsets.clear();
   originalF0ValuesMulti.clear();
   dragStartY = y;
 
@@ -663,6 +665,7 @@ void PitchEditor::startMultiNoteDrag(const std::vector<Note *> &notes,
   for (auto *note : draggedNotes)
   {
     originalMidiNotes.push_back(note->getMidiNote());
+    originalPitchOffsets.push_back(note->getPitchOffset());
 
     // Capture delta slice for each note
     int startFrame = note->getStartFrame();
@@ -701,9 +704,11 @@ void PitchEditor::updateMultiNoteDrag(float y)
   if (snapToSemitoneDragEnabled)
     deltaSemitones = std::round(deltaSemitones);
 
-  for (auto *note : draggedNotes)
+  for (size_t i = 0; i < draggedNotes.size(); ++i)
   {
-    note->setPitchOffset(deltaSemitones);
+    auto *note = draggedNotes[i];
+    float initialOffset = (i < originalPitchOffsets.size()) ? originalPitchOffsets[i] : 0.0f;
+    note->setPitchOffset(initialOffset + deltaSemitones);
     note->markDirty();
   }
 
@@ -717,6 +722,7 @@ void PitchEditor::endMultiNoteDrag()
     isMultiDragging = false;
     draggedNotes.clear();
     originalMidiNotes.clear();
+    originalPitchOffsets.clear();
     originalF0ValuesMulti.clear();
     return;
   }

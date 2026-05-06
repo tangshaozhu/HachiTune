@@ -1792,14 +1792,49 @@ void PianoRollComponent::drawPitchCurves(juce::Graphics &g)
   {
     const bool useLiveBasePreview =
         (selectHandler_->isSingleNoteDragging() || pitchEditor->isDraggingMultiNotes());
-    if (!useLiveBasePreview)
+    
+    const auto &basePitchCurve =
+        useLiveBasePreview ? audioData.basePitch : cachedBasePitch;
+    
+    // During drag preview, we need to dynamically calculate basePitch based on current note positions
+    std::vector<float> dynamicBasePitch;
+    const auto* renderBasePitch = &basePitchCurve;
+    
+    if (useLiveBasePreview && project)
+    {
+      // Dynamically rebuild basePitch with current pitchOffsets for accurate preview
+      const auto &notes = project->getNotes();
+      const int totalFrames = static_cast<int>(audioData.f0.size());
+      
+      std::vector<BasePitchCurve::NoteSegment> segments;
+      for (const auto &note : notes)
+      {
+        if (note.isRest()) continue;
+        
+        BasePitchCurve::NoteSegment seg;
+        seg.startFrame = note.getStartFrame();
+        seg.endFrame = note.getEndFrame();
+        seg.midiNote = static_cast<float>(note.getMidiNote()) 
+                     + note.getPitchOffset()
+                     - (note.getTiltLeft() + note.getTiltRight()) / 2.0f;
+        segments.push_back(seg);
+      }
+      
+      std::sort(segments.begin(), segments.end(),
+                [](const auto& a, const auto& b) { return a.startFrame < b.startFrame; });
+      
+      if (!segments.empty())
+      {
+        dynamicBasePitch = BasePitchCurve::generateForNotes(segments, totalFrames);
+        renderBasePitch = &dynamicBasePitch;
+      }
+    }
+    else if (!useLiveBasePreview)
     {
       updateBasePitchCacheIfNeeded();
     }
 
-    const auto &basePitchCurve =
-        useLiveBasePreview ? audioData.basePitch : cachedBasePitch;
-    if (!basePitchCurve.empty())
+    if (!renderBasePitch->empty())
     {
       // Calculate visible frame range
       double visibleStartTime = scrollX / pixelsPerSecond;
@@ -1808,7 +1843,7 @@ void PianoRollComponent::drawPitchCurves(juce::Graphics &g)
           std::max(0, static_cast<int>(visibleStartTime * audioData.sampleRate /
                                        HOP_SIZE));
       int visEndFrame = std::min(
-          static_cast<int>(basePitchCurve.size()),
+          static_cast<int>(renderBasePitch->size()),
           static_cast<int>(visibleEndTime * audioData.sampleRate / HOP_SIZE) +
               1);
 
@@ -1820,9 +1855,9 @@ void PianoRollComponent::drawPitchCurves(juce::Graphics &g)
 
       for (int i = visStartFrame; i < visEndFrame; ++i)
       {
-        if (i >= 0 && i < static_cast<int>(basePitchCurve.size()))
+        if (i >= 0 && i < static_cast<int>(renderBasePitch->size()))
         {
-          float baseMidi = basePitchCurve[static_cast<size_t>(i)];
+          float baseMidi = (*renderBasePitch)[static_cast<size_t>(i)];
           if (baseMidi > 0.0f)
           {
             float x = framesToSeconds(i) * pixelsPerSecond;

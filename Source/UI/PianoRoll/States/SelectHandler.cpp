@@ -406,9 +406,10 @@ bool SelectHandler::mouseDrag(const juce::MouseEvent &e, float worldX,
       deltaSemitones = snappedMidi - originalMidiNote;
     }
 
-    draggedNote->setPitchOffset(deltaSemitones);
+    // Add the original pitchOffset to maintain the current position
+    draggedNote->setPitchOffset(originalPitchOffset + deltaSemitones);
     draggedNote->markDirty();
-    applyDragBasePreview(deltaSemitones);
+    applyDragBasePreview(originalPitchOffset + deltaSemitones);
 
     // Update handle positions to follow notes during drag
     owner_.updatePitchToolHandlesFromSelection();
