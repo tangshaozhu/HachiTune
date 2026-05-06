@@ -1674,6 +1674,15 @@ void PianoRollComponent::drawPitchCurves(juce::Graphics &g)
         if (note.isRest())
           continue;
 
+        // Optimization: Skip notes outside visible time range
+        double noteStartTime = framesToSeconds(note.getStartFrame());
+        double noteEndTime = framesToSeconds(note.getEndFrame());
+        double visibleStartTime = scrollX / pixelsPerSecond;
+        double visibleEndTime = (scrollX + getWidth()) / pixelsPerSecond;
+        
+        if (noteEndTime < visibleStartTime || noteStartTime > visibleEndTime)
+          continue;
+
         const bool isDraggedNote =
             (selectHandler_->isSingleNoteDragging() && selectHandler_->getDraggedNote() == &note) ||
             (pitchEditor->isDraggingMultiNotes() &&
@@ -1690,8 +1699,14 @@ void PianoRollComponent::drawPitchCurves(juce::Graphics &g)
         int endFrame =
             std::min(note.getEndFrame(), static_cast<int>(audioData.f0.size()));
 
-        for (int i = startFrame; i < endFrame; ++i)
+        // Optimization: Use pixel-level decimation for long notes (>500 frames)
+        const int noteFrameCount = endFrame - startFrame;
+        const float frameStep = (noteFrameCount > 500) ? 
+            std::max(1.0f, static_cast<float>(noteFrameCount) / getWidth()) : 1.0f;
+        
+        for (float fi = static_cast<float>(startFrame); fi < endFrame; fi += frameStep)
         {
+          int i = static_cast<int>(fi);
           float baseMidi;
           if (shouldAddPitchOffset)
           {
