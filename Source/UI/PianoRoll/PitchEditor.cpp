@@ -895,7 +895,16 @@ void PitchEditor::prepareDragBasePreview()
         audioData.f0[static_cast<size_t>(frame)];
   }
 
-  lastDragPitchOffset = 0.0f;
+  // Initialize lastDragPitchOffset to the current pitchOffset of dragged notes
+  // This ensures delta calculation is correct when notes already have non-zero pitchOffset
+  if (!selectedNotes.empty())
+  {
+    lastDragPitchOffset = selectedNotes[0]->getPitchOffset();
+  }
+  else
+  {
+    lastDragPitchOffset = 0.0f;
+  }
 }
 
 void PitchEditor::applyDragBasePreview(float pitchOffsetSemitones)
@@ -903,7 +912,10 @@ void PitchEditor::applyDragBasePreview(float pitchOffsetSemitones)
   if (std::abs(pitchOffsetSemitones - lastDragPitchOffset) < 0.0001f)
     return;
 
+  // Calculate the delta change from last preview
+  float deltaFromLast = pitchOffsetSemitones - lastDragPitchOffset;
   lastDragPitchOffset = pitchOffsetSemitones;
+
   if (!project || dragPreviewStartFrame < 0 ||
       dragPreviewEndFrame <= dragPreviewStartFrame ||
       dragPreviewWeights.empty() || dragBasePitchSnapshot.empty())
@@ -923,7 +935,7 @@ void PitchEditor::applyDragBasePreview(float pitchOffsetSemitones)
     const int frame = dragPreviewStartFrame + i;
     const float baseMidi =
         dragBasePitchSnapshot[static_cast<size_t>(i)] +
-        pitchOffsetSemitones * dragPreviewWeights[static_cast<size_t>(i)];
+        deltaFromLast * dragPreviewWeights[static_cast<size_t>(i)];
     audioData.basePitch[static_cast<size_t>(frame)] = baseMidi;
     audioData.baseF0[static_cast<size_t>(frame)] = midiToFreq(baseMidi);
 

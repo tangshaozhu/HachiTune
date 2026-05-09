@@ -1808,10 +1808,8 @@ void PianoRollComponent::drawPitchCurves(juce::Graphics &g)
     const bool useLiveBasePreview =
         (selectHandler_->isSingleNoteDragging() || pitchEditor->isDraggingMultiNotes());
     
-    const auto &basePitchCurve =
-        useLiveBasePreview ? audioData.basePitch : cachedBasePitch;
-    
     // During drag preview, we need to dynamically calculate basePitch based on current note positions
+    const auto &basePitchCurve = audioData.basePitch;
     std::vector<float> dynamicBasePitch;
     const auto* renderBasePitch = &basePitchCurve;
     
@@ -1847,6 +1845,7 @@ void PianoRollComponent::drawPitchCurves(juce::Graphics &g)
     else if (!useLiveBasePreview)
     {
       updateBasePitchCacheIfNeeded();
+      renderBasePitch = &cachedBasePitch;
     }
 
     if (!renderBasePitch->empty())
