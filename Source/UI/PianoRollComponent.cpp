@@ -1707,30 +1707,37 @@ void PianoRollComponent::drawPitchCurves(juce::Graphics &g)
         for (float fi = static_cast<float>(startFrame); fi < endFrame; fi += frameStep)
         {
           int i = static_cast<int>(fi);
-          float baseMidi;
+          float finalMidi;
+          
           if (shouldAddPitchOffset)
           {
-            // During drag preview: use note's original base pitch + current pitchOffset
-            // This avoids double-offset when audioData.basePitch already contains old pitchOffset
-            baseMidi = static_cast<float>(note.getMidiNote()) 
-                     - (note.getTiltLeft() + note.getTiltRight()) / 2.0f
-                     + note.getPitchOffset();
+            // During drag preview: directly use audioData.f0 which has been correctly updated by applyDragBasePreview with weights
+            // This ensures the visual curve matches the weighted blending in transition regions
+            if (i < static_cast<int>(audioData.f0.size()) && 
+                audioData.f0[static_cast<size_t>(i)] > 0.0f)
+            {
+              finalMidi = freqToMidi(audioData.f0[static_cast<size_t>(i)]) + globalOffset;
+            }
+            else
+            {
+              continue; // Skip unvoiced frames
+            }
           }
           else
           {
-            // Normal rendering: use audioData.basePitch which already includes pitchOffset
-            baseMidi = (i < static_cast<int>(audioData.basePitch.size()))
-                           ? audioData.basePitch[static_cast<size_t>(i)]
-                           : ((i < static_cast<int>(audioData.f0.size()) &&
-                               audioData.f0[static_cast<size_t>(i)] > 0.0f)
-                                  ? freqToMidi(audioData.f0[static_cast<size_t>(i)])
-                                  : 0.0f);
-          }
+            // Normal rendering: use basePitch + deltaPitch
+            float baseMidi = (i < static_cast<int>(audioData.basePitch.size()))
+                                 ? audioData.basePitch[static_cast<size_t>(i)]
+                                 : ((i < static_cast<int>(audioData.f0.size()) &&
+                                     audioData.f0[static_cast<size_t>(i)] > 0.0f)
+                                        ? freqToMidi(audioData.f0[static_cast<size_t>(i)])
+                                        : 0.0f);
 
-          float deltaMidi = (i < static_cast<int>(audioData.deltaPitch.size()))
-                                ? audioData.deltaPitch[static_cast<size_t>(i)]
-                                : 0.0f;
-          float finalMidi = baseMidi + deltaMidi + globalOffset;
+            float deltaMidi = (i < static_cast<int>(audioData.deltaPitch.size()))
+                                  ? audioData.deltaPitch[static_cast<size_t>(i)]
+                                  : 0.0f;
+            finalMidi = baseMidi + deltaMidi + globalOffset;
+          }
 
           if (finalMidi > 0.0f)
           {

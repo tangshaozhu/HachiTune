@@ -91,6 +91,7 @@ void PitchEditor::updateNoteDrag(float y)
   // Add the original pitchOffset to maintain the current position
   draggedNote->setPitchOffset(originalPitchOffset + deltaSemitones);
   draggedNote->markDirty();
+  
   applyDragBasePreview(originalPitchOffset + deltaSemitones);
 }
 
@@ -926,6 +927,7 @@ void PitchEditor::prepareDragBasePreview()
   dragBasePitchSnapshot.resize(static_cast<size_t>(count));
   dragF0Snapshot.resize(static_cast<size_t>(count));
 
+  // Save the current basePitch as-is (it already includes any existing pitchOffset from previous operations)
   for (int i = 0; i < count; ++i)
   {
     const int frame = dragPreviewStartFrame + i;
@@ -949,12 +951,11 @@ void PitchEditor::prepareDragBasePreview()
 
 void PitchEditor::applyDragBasePreview(float pitchOffsetSemitones)
 {
-  if (std::abs(pitchOffsetSemitones - lastDragPitchOffset) < 0.0001f)
+  // Calculate total delta from the start of drag (not from last preview)
+  float totalDelta = pitchOffsetSemitones - lastDragPitchOffset;
+  
+  if (std::abs(totalDelta) < 0.0001f)
     return;
-
-  // Calculate the delta change from last preview
-  float deltaFromLast = pitchOffsetSemitones - lastDragPitchOffset;
-  lastDragPitchOffset = pitchOffsetSemitones;
 
   if (!project || dragPreviewStartFrame < 0 ||
       dragPreviewEndFrame <= dragPreviewStartFrame ||
@@ -973,9 +974,10 @@ void PitchEditor::applyDragBasePreview(float pitchOffsetSemitones)
   for (int i = 0; i < count; ++i)
   {
     const int frame = dragPreviewStartFrame + i;
+    // Apply total delta from drag start, weighted by boundary smoothing
     const float baseMidi =
         dragBasePitchSnapshot[static_cast<size_t>(i)] +
-        deltaFromLast * dragPreviewWeights[static_cast<size_t>(i)];
+        totalDelta * dragPreviewWeights[static_cast<size_t>(i)];
     audioData.basePitch[static_cast<size_t>(frame)] = baseMidi;
     audioData.baseF0[static_cast<size_t>(frame)] = midiToFreq(baseMidi);
 

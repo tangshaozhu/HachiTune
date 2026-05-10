@@ -409,6 +409,7 @@ bool SelectHandler::mouseDrag(const juce::MouseEvent &e, float worldX,
     // Add the original pitchOffset to maintain the current position
     draggedNote->setPitchOffset(originalPitchOffset + deltaSemitones);
     draggedNote->markDirty();
+    
     applyDragBasePreview(originalPitchOffset + deltaSemitones);
 
     // Update handle positions to follow notes during drag
@@ -1379,6 +1380,7 @@ void SelectHandler::prepareDragBasePreview()
   dragBasePitchSnapshot.resize(static_cast<size_t>(count));
   dragF0Snapshot.resize(static_cast<size_t>(count));
 
+  // Save the current basePitch as-is (it already includes any existing pitchOffset from previous operations)
   for (int i = 0; i < count; ++i)
   {
     const int frame = dragPreviewStartFrame + i;
@@ -1389,18 +1391,23 @@ void SelectHandler::prepareDragBasePreview()
   }
 
   // Initialize lastDragPitchOffset to the current pitchOffset of dragged note
-  // This ensures delta calculation is correct when note already has non-zero pitchOffset
-  lastDragPitchOffset = draggedNote->getPitchOffset();
+  if (draggedNote)
+  {
+    lastDragPitchOffset = draggedNote->getPitchOffset();
+  }
+  else
+  {
+    lastDragPitchOffset = 0.0f;
+  }
 }
 
 void SelectHandler::applyDragBasePreview(float pitchOffsetSemitones)
 {
-  if (std::abs(pitchOffsetSemitones - lastDragPitchOffset) < 0.0001f)
+  // Calculate total delta from the start of drag
+  float totalDelta = pitchOffsetSemitones - lastDragPitchOffset;
+  
+  if (std::abs(totalDelta) < 0.0001f)
     return;
-
-  // Calculate the delta change from last preview
-  float deltaFromLast = pitchOffsetSemitones - lastDragPitchOffset;
-  lastDragPitchOffset = pitchOffsetSemitones;
   
   auto *project = owner_.project;
   if (!project || dragPreviewStartFrame < 0 ||
@@ -1421,10 +1428,10 @@ void SelectHandler::applyDragBasePreview(float pitchOffsetSemitones)
   for (int i = 0; i < count; ++i)
   {
     const int frame = dragPreviewStartFrame + i;
-    // Apply only the delta change from last preview, not the absolute offset
+    // Apply total delta from drag start, weighted by boundary smoothing
     const float baseMidi =
         dragBasePitchSnapshot[static_cast<size_t>(i)] +
-        deltaFromLast * dragPreviewWeights[static_cast<size_t>(i)];
+        totalDelta * dragPreviewWeights[static_cast<size_t>(i)];
     audioData.basePitch[static_cast<size_t>(frame)] = baseMidi;
     audioData.baseF0[static_cast<size_t>(frame)] =
         midiToFreq(baseMidi);
