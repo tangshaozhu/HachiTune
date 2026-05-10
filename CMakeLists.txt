@@ -681,31 +681,31 @@ foreach(GMODEL ${REQUIRED_GAME_MODELS})
 endforeach()
 message(STATUS "All required models found")
 
-# Copy all files from models directory to targets
-file(GLOB ALL_MODEL_FILES "${MODELS_DIR}/*.onnx" "${MODELS_DIR}/*.bin")
-foreach(MODEL_PATH ${ALL_MODEL_FILES})
-    get_filename_component(MODEL_NAME "${MODEL_PATH}" NAME)
-    if(APPLE)
-        add_custom_command(TARGET HachiTune POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:HachiTune>/Contents/Resources/models"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MODEL_PATH}" "$<TARGET_BUNDLE_DIR:HachiTune>/Contents/Resources/models/${MODEL_NAME}")
-        add_custom_command(TARGET HachiTunePlugin_VST3 POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:HachiTunePlugin_VST3>/Contents/Resources/models"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MODEL_PATH}" "$<TARGET_BUNDLE_DIR:HachiTunePlugin_VST3>/Contents/Resources/models/${MODEL_NAME}")
-        add_custom_command(TARGET HachiTunePlugin_AU POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:HachiTunePlugin_AU>/Contents/Resources/models"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MODEL_PATH}" "$<TARGET_BUNDLE_DIR:HachiTunePlugin_AU>/Contents/Resources/models/${MODEL_NAME}")
-    else()
-        add_custom_command(TARGET HachiTune POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:HachiTune>/models"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MODEL_PATH}" "$<TARGET_FILE_DIR:HachiTune>/models/${MODEL_NAME}")
-        add_custom_command(TARGET HachiTunePlugin_VST3 POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:HachiTunePlugin_VST3>/models"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MODEL_PATH}" "$<TARGET_FILE_DIR:HachiTunePlugin_VST3>/models/${MODEL_NAME}")
+# Copy required model files only (not all .onnx/.bin files)
+foreach(MODEL ${REQUIRED_MODELS})
+    set(MODEL_PATH "${MODELS_DIR}/${MODEL}")
+    if(EXISTS "${MODEL_PATH}")
+        if(APPLE)
+            add_custom_command(TARGET HachiTune POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:HachiTune>/Contents/Resources/models"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MODEL_PATH}" "$<TARGET_BUNDLE_DIR:HachiTune>/Contents/Resources/models/${MODEL}")
+            add_custom_command(TARGET HachiTunePlugin_VST3 POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:HachiTunePlugin_VST3>/Contents/Resources/models"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MODEL_PATH}" "$<TARGET_BUNDLE_DIR:HachiTunePlugin_VST3>/Contents/Resources/models/${MODEL}")
+            add_custom_command(TARGET HachiTunePlugin_AU POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:HachiTunePlugin_AU>/Contents/Resources/models"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MODEL_PATH}" "$<TARGET_BUNDLE_DIR:HachiTunePlugin_AU>/Contents/Resources/models/${MODEL}")
+        else()
+            add_custom_command(TARGET HachiTune POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:HachiTune>/models"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MODEL_PATH}" "$<TARGET_FILE_DIR:HachiTune>/models/${MODEL}")
+            add_custom_command(TARGET HachiTunePlugin_VST3 POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:HachiTunePlugin_VST3>/models"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MODEL_PATH}" "$<TARGET_FILE_DIR:HachiTunePlugin_VST3>/models/${MODEL}")
+        endif()
     endif()
 endforeach()
 
-# Copy GAME model subdirectory
 file(GLOB GAME_MODEL_FILES "${GAME_DIR}/*")
 foreach(GFILE_PATH ${GAME_MODEL_FILES})
     get_filename_component(GFILE_NAME "${GFILE_PATH}" NAME)
