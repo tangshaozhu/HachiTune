@@ -258,6 +258,9 @@ void PitchEditor::endDrawing()
     maxFrame = std::max(maxFrame, e.idx);
   }
 
+  // Collect pitch offset edits for undo/redo support
+  std::vector<PitchOffsetEdit> pitchOffsetEdits;
+
   // Clear deltaPitch for notes in edited range and mark them dirty
   if (project && minFrame <= maxFrame)
   {
@@ -265,6 +268,8 @@ void PitchEditor::endDrawing()
     const int maxFrameExclusive = maxFrame + 1;
     const int totalFrames = audioData.getNumFrames();
     auto &notes = project->getNotes();
+    
+    int noteIndex = 0;
     
     for (auto &note : notes)
     {
@@ -290,6 +295,11 @@ void PitchEditor::endDrawing()
           note.setOriginalDeltaPitch(noteDelta);
           note.setDeltaPitch(noteDelta);
         }
+        
+        // Save old pitchOffset before adjustment
+        PitchOffsetEdit edit;
+        edit.noteIndex = noteIndex;
+        edit.oldOffset = note.getPitchOffset();
         
         // Adjust pitchOffset to center the drawn F0 curve around the note
         // Calculate average F0 MIDI value in this note's range
@@ -331,12 +341,18 @@ void PitchEditor::endDrawing()
             // Apply the new pitchOffset (clamp to reasonable range)
             const float kMaxPitchOffset = 24.0f; // ±2 octaves max
             note.setPitchOffset(std::clamp(newPitchOffset, -kMaxPitchOffset, kMaxPitchOffset));
+            
+            // Save new pitchOffset
+            edit.newOffset = note.getPitchOffset();
+            pitchOffsetEdits.push_back(edit);
           }
         }
         
         // Mark note as dirty to ensure synthesis happens
         note.markSynthDirty();
       }
+      
+      noteIndex++;
     }
     
     // Manually rebuild basePitch with updated pitchOffsets WITHOUT calling composeF0InPlace
@@ -416,7 +432,7 @@ void PitchEditor::endDrawing()
     
     auto action = std::make_unique<F0EditAction>(
         &audioData.f0, &audioData.deltaPitch, &audioData.voicedMask,
-        drawingEdits, [this, onPitchEditFinished](int minFrame, int maxFrame)
+        drawingEdits, pitchOffsetEdits, [this, onPitchEditFinished](int minFrame, int maxFrame)
         {
           if (project) {
             project->setF0DirtyRange(minFrame, maxFrame + 1);
@@ -434,6 +450,30 @@ void PitchEditor::endDrawing()
             if (onPitchEditFinished)
               onPitchEditFinished();
           } });
+    
+    // Set the pitch offset change callback
+    action->setOnPitchOffsetChanged([this](int noteIndex, float newOffset)
+    {
+      if (project)
+      {
+        auto &notes = project->getNotes();
+        int idx = 0;
+        for (auto &note : notes)
+        {
+          if (!note.isRest())
+          {
+            if (idx == noteIndex)
+            {
+              note.setPitchOffset(newOffset);
+              note.markDirty();
+              break;
+            }
+            idx++;
+          }
+        }
+      }
+    });
+    
     undoManager->addAction(std::move(action));
   }
 

@@ -3,6 +3,7 @@
 #include "../../../Utils/Constants.h"
 #include "../../../Utils/PitchCurveProcessor.h"
 #include "../../../Utils/BasePitchCurve.h"
+#include "../../../Undo/F0Actions.h"
 
 DrawHandler::DrawHandler(PianoRollComponent &owner)
     : InteractionHandler(owner) {}
@@ -128,8 +129,8 @@ void DrawHandler::commitPitchDrawing() {
     maxFrame = std::max(maxFrame, e.idx);
   }
 
-  // Record pitchOffset changes for undo support
-  std::vector<std::pair<int, float>> pitchOffsetChanges;
+  // Record pitchOffset changes for undo/redo support
+  std::vector<PitchOffsetEdit> pitchOffsetEdits;
 
   // Clear deltaPitch for notes in the edited range so they use the drawn F0
   // Also mark notes as dirty to ensure synthesis happens
@@ -163,6 +164,11 @@ void DrawHandler::commitPitchDrawing() {
           note.setDeltaPitch(noteDelta);
         }
         
+        // Save old pitchOffset before adjustment
+        PitchOffsetEdit edit;
+        edit.noteIndex = noteIndex;
+        edit.oldOffset = note.getPitchOffset();
+        
         // Adjust pitchOffset to center the drawn F0 curve around the note
         // Calculate average F0 MIDI value in this note's range
         float sumF0Midi = 0.0f;
@@ -190,12 +196,13 @@ void DrawHandler::commitPitchDrawing() {
           // We want: originalBaseMidi + newPitchOffset ≈ avgF0Midi
           const float newPitchOffset = avgF0Midi - originalBaseMidi;
           
-          // Record old pitchOffset for undo support
-          pitchOffsetChanges.push_back({noteIndex, note.getPitchOffset()});
-          
           // Apply the new pitchOffset (clamp to reasonable range)
           const float kMaxPitchOffset = 24.0f; // ±2 octaves max
           note.setPitchOffset(std::clamp(newPitchOffset, -kMaxPitchOffset, kMaxPitchOffset));
+          
+          // Save new pitchOffset
+          edit.newOffset = note.getPitchOffset();
+          pitchOffsetEdits.push_back(edit);
         }
         
         // 标记音符为脏数据，确保合成器会处理这些音符
@@ -279,32 +286,14 @@ void DrawHandler::commitPitchDrawing() {
   if (owner_.undoManager && owner_.project) {
     auto &audioData = owner_.project->getAudioData();
     
-    // Capture pitchOffset changes for undo/redo
-    auto capturedPitchOffsetChanges = pitchOffsetChanges;
-    
     // 捕获当前的回调函数，确保撤销/重做时能正确触发
     auto onPitchEditFinished = owner_.onPitchEditFinished;
     
     auto action = std::make_unique<F0EditAction>(
         &audioData.f0, &audioData.deltaPitch, &audioData.voicedMask,
-        drawingEdits, [this, onPitchEditFinished, capturedPitchOffsetChanges](int minFrame, int maxFrame) {
+        drawingEdits, pitchOffsetEdits, [this, onPitchEditFinished](int minFrame, int maxFrame) {
           if (owner_.project) {
-            // First restore pitchOffset values
             auto &notes = owner_.project->getNotes();
-            int noteIndex = 0;
-            for (auto &note : notes) {
-              for (const auto &[idx, oldOffset] : capturedPitchOffsetChanges) {
-                if (noteIndex == idx) {
-                  note.setPitchOffset(oldOffset);
-                  break;
-                }
-              }
-              if (!note.isRest()) {
-                noteIndex++;
-              }
-            }
-            
-            // Then rebuild basePitch and deltaPitch with restored pitchOffsets
             auto &audioData = owner_.project->getAudioData();
             const int totalFrames = audioData.getNumFrames();
             const int maxFrameExclusive = minFrame > maxFrame ? minFrame + 1 : maxFrame + 1;
@@ -378,6 +367,30 @@ void DrawHandler::commitPitchDrawing() {
               onPitchEditFinished();
           }
         });
+    
+    // Set the pitch offset change callback
+    action->setOnPitchOffsetChanged([this](int noteIndex, float newOffset)
+    {
+      if (owner_.project)
+      {
+        auto &notes = owner_.project->getNotes();
+        int idx = 0;
+        for (auto &note : notes)
+        {
+          if (!note.isRest())
+          {
+            if (idx == noteIndex)
+            {
+              note.setPitchOffset(newOffset);
+              note.markDirty();
+              break;
+            }
+            idx++;
+          }
+        }
+      }
+    });
+    
     owner_.undoManager->addAction(std::move(action));
   }
 
