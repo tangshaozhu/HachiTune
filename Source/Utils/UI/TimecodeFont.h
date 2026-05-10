@@ -77,7 +77,7 @@ public:
         return juce::Font(juce::FontOptions(height));
 #elif JUCE_WINDOWS
         return juce::Font(
-            juce::FontOptions("Yu Gothic UI", height, juce::Font::plain));
+            juce::FontOptions("Microsoft YaHei", height, juce::Font::plain));
 #else
         return juce::Font(juce::FontOptions(height));
 #endif
@@ -96,7 +96,7 @@ public:
         return juce::Font(juce::FontOptions(height)).boldened();
 #elif JUCE_WINDOWS
         return juce::Font(
-            juce::FontOptions("Yu Gothic UI", height, juce::Font::bold));
+            juce::FontOptions("Microsoft YaHei", height, juce::Font::bold));
 #else
         return juce::Font(juce::FontOptions(height)).boldened();
 #endif
