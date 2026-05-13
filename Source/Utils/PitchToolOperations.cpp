@@ -42,11 +42,39 @@ std::vector<float> reduceVariance(const std::vector<float>& deltaPitch,
     return {};
   }
 
-  std::vector<float> result(deltaPitch.size(), 0.0f);
-  std::transform(deltaPitch.begin(), deltaPitch.end(), result.begin(),
-                 [factor](float value) {
-                   return value * factor;
-                 });
+  // When factor is close to 1, no change needed
+  if (std::abs(factor - 1.0f) < 0.001f) {
+    return deltaPitch;
+  }
+
+  std::vector<float> result(deltaPitch.size());
+  const size_t n = deltaPitch.size();
+  
+  // Boundary region: keep 15% of note length fixed at each end
+  const size_t boundaryWidth = std::max(static_cast<size_t>(1), n / 7);
+  
+  for (size_t i = 0; i < n; ++i) {
+    // Calculate distance from nearest boundary (0.0 to 1.0)
+    float boundaryDist = 0.0f;
+    if (i < boundaryWidth) {
+      // Left boundary region
+      boundaryDist = static_cast<float>(i) / static_cast<float>(boundaryWidth);
+    } else if (i >= n - boundaryWidth) {
+      // Right boundary region
+      boundaryDist = static_cast<float>(n - 1 - i) / static_cast<float>(boundaryWidth);
+    } else {
+      // Middle region - fully apply factor
+      boundaryDist = 1.0f;
+    }
+    
+    // Use cosine interpolation for smooth transition
+    // At boundary (dist=0): weight=1.0 (no scaling)
+    // At middle (dist=1.0): weight=factor
+    const float smoothWeight = 0.5f * (1.0f - std::cos(boundaryDist * 3.14159265f));
+    const float effectiveFactor = 1.0f + (factor - 1.0f) * smoothWeight;
+    
+    result[i] = deltaPitch[i] * effectiveFactor;
+  }
 
   return result;
 }
