@@ -60,7 +60,8 @@ struct AdjacentNoteContext
  * This function chains multiple transformations in order:
  * 1. Variance scaling
  * 2. Tilt (left and right combined)
- * 3. Boundary smoothing (left and right)
+ * 3. High-pass flattening
+ * 4. Boundary smoothing (left and right)
  * 
  * @param originalDelta The pristine deltaPitch curve from analysis (never modified)
  * @param tiltLeft Tilt amount at left edge in semitones
@@ -68,6 +69,7 @@ struct AdjacentNoteContext
  * @param varianceScale Variance scaling factor (1.0=unchanged, 0.0=flat, >1.0=amplify, <0.0=invert)
  * @param smoothLeftFrames Smoothing transition length at left boundary
  * @param smoothRightFrames Smoothing transition length at right boundary
+ * @param highPassCutoff High-pass filter cutoff ratio (0.0=no effect, 1.0=fully flat)
  * @param adjacentContext Context for adjacent notes (for boundary smoothing)
  * @return Transformed deltaPitch curve
  */
@@ -77,6 +79,19 @@ std::vector<float> applyAllTransformations(const std::vector<float>& originalDel
                                            float varianceScale,
                                            int smoothLeftFrames,
                                            int smoothRightFrames,
+                                           float highPassCutoff = 0.0f,
                                            const AdjacentNoteContext& adjacentContext = {});
+
+/**
+ * High-pass filtering flattening algorithm.
+ * 
+ * Treats the F0 curve as a time-domain signal and applies high-pass filtering
+ * to gradually remove low-frequency trends while preserving high-frequency details.
+ * 
+ * @param f0Curve The original F0 curve (frequency values over time)
+ * @param cutoffRatio Controls the degree of flattening (0.0=no effect, 1.0=fully flat)
+ * @return Flattened F0 curve with details preserved
+ */
+std::vector<float> highPassFlatten(const std::vector<float>& f0Curve, float cutoffRatio);
 
 } // namespace PitchToolOperations

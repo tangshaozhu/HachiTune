@@ -277,61 +277,35 @@ namespace PitchCurveProcessor
         // CRITICAL: Rebuild deltaPitch from Note objects NON-DESTRUCTIVELY
         // Clear global deltaPitch first
         audioData.deltaPitch.assign(static_cast<size_t>(totalFrames), 0.0f);
-        
-        // Composite each note's deltaPitch curve (WITH transformations applied) into audioData.deltaPitch
-        const auto& allNotes = project.getNotes();
-        for (const auto& note : allNotes)
+
+        for (auto& note : project.getNotes())
         {
-            if (note.isRest())
-                continue;
-                
-            // Use originalDeltaPitch if available, else fall back to deltaPitch
-            const auto& rawSourceData = note.hasOriginalDeltaPitch() ? note.getOriginalDeltaPitch() : note.getDeltaPitch();
-            if (rawSourceData.empty())
-                continue;
+            if (note.isRest()) continue;
 
             const int startFrame = note.getStartFrame();
             const int endFrame = note.getEndFrame();
             const int numFrames = endFrame - startFrame;
-            if (numFrames <= 0)
-                continue;
 
-            // If the note has been time-stretched, resample its stored delta
-            // to match the current output frame count so the pitch shape scales
-            // together with the note duration.
-            std::vector<float> resampledBuf;
-            const std::vector<float>* sourceDataPtr = &rawSourceData;
-            if (static_cast<int>(rawSourceData.size()) != numFrames)
-            {
-                resampledBuf = CurveResampler::resampleLinear(rawSourceData, numFrames);
-                sourceDataPtr = &resampledBuf;
-            }
-            const auto& sourceData = *sourceDataPtr;
-            
-            // Build adjacent note context
-            auto adjacentContext = buildAdjacentContext(allNotes, note);
-            
-            // Apply all transformation parameters NON-DESTRUCTIVELY
-            std::vector<float> transformedDelta = PitchToolOperations::applyAllTransformations(
-                sourceData,
+            if (numFrames <= 0) continue;
+
+            const auto pristineDelta = note.getOriginalDeltaPitch();
+            if (pristineDelta.empty()) continue;
+
+            const auto context = buildAdjacentContext(project.getNotes(), note);
+
+            // Apply transformations in the correct order
+            const auto transformedDelta = applyAllTransformations(
+                pristineDelta,
                 note.getTiltLeft(),
                 note.getTiltRight(),
                 note.getVarianceScale(),
                 note.getSmoothLeftFrames(),
                 note.getSmoothRightFrames(),
-                adjacentContext
+                note.getHighPassCutoff(),
+                context
             );
 
-            // Apply per-note delta scale/offset (from delta control handles)
-            const float dScale = note.getDeltaScale();
-            const float dOffset = note.getDeltaOffset();
-            if (std::abs(dScale - 1.0f) > 0.0001f || std::abs(dOffset) > 0.0001f)
-            {
-                for (auto& v : transformedDelta)
-                    v = v * dScale + dOffset;
-            }
-            
-            for (int i = 0; i < numFrames && i < static_cast<int>(transformedDelta.size()); ++i)
+            for (int i = 0; i < numFrames; ++i)
             {
                 const int globalIdx = startFrame + i;
                 if (globalIdx >= 0 && globalIdx < totalFrames)
@@ -339,12 +313,101 @@ namespace PitchCurveProcessor
             }
         }
 
-        // Update cached baseF0
-        audioData.baseF0.resize(static_cast<size_t>(totalFrames));
-        for (int i = 0; i < totalFrames; ++i)
-            audioData.baseF0[static_cast<size_t>(i)] = midiToFreq(audioData.basePitch[static_cast<size_t>(i)]);
+        composeF0InPlace(project, /*applyUvMask=*/true);
+    }
 
-        composeF0InPlace(project, /*applyUvMask=*/false);
+    void composeF0InPlace(Project& project, bool applyUvMask, float globalPitchOffset)
+    {
+        auto& audioData = project.getAudioData();
+        const int totalFrames = audioData.getNumFrames();
+
+        audioData.f0.assign(static_cast<size_t>(totalFrames), 0.0f);
+        for (int i = 0; i < totalFrames; ++i)
+        {
+            const float base = audioData.basePitch[static_cast<size_t>(i)];
+            const float delta = audioData.deltaPitch[static_cast<size_t>(i)];
+            audioData.f0[static_cast<size_t>(i)] = midiToFreq(base + delta + globalPitchOffset);
+        }
+
+        if (applyUvMask && !audioData.voicedMask.empty() &&
+            audioData.voicedMask.size() == audioData.f0.size())
+        {
+            for (int i = 0; i < totalFrames; ++i)
+            {
+                if (!audioData.voicedMask[static_cast<size_t>(i)])
+                    audioData.f0[static_cast<size_t>(i)] = 0.0f;
+            }
+        }
+    }
+
+    std::vector<float> composeF0(const Project& project, bool applyUvMask, float globalPitchOffset)
+    {
+        std::vector<float> result;
+        const int totalFrames = project.getAudioData().getNumFrames();
+        
+        result.assign(static_cast<size_t>(totalFrames), 0.0f);
+        for (int i = 0; i < totalFrames; ++i)
+        {
+            const float base = project.getAudioData().basePitch[static_cast<size_t>(i)];
+            const float delta = project.getAudioData().deltaPitch[static_cast<size_t>(i)];
+            result[static_cast<size_t>(i)] = midiToFreq(base + delta + globalPitchOffset);
+        }
+
+        if (applyUvMask && !project.getAudioData().voicedMask.empty() &&
+            project.getAudioData().voicedMask.size() == result.size())
+        {
+            for (int i = 0; i < totalFrames; ++i)
+            {
+                if (!project.getAudioData().voicedMask[static_cast<size_t>(i)])
+                    result[static_cast<size_t>(i)] = 0.0f;
+            }
+        }
+
+        return result;
+    }
+
+    void rebuildDeltaForNotes(Project& project, const std::vector<Note*>& affectedNotes)
+    {
+        auto& audioData = project.getAudioData();
+        const int totalFrames = audioData.getNumFrames();
+
+        for (auto* notePtr : affectedNotes)
+        {
+            if (!notePtr || notePtr->isRest()) continue;
+
+            const auto& note = *notePtr;
+            const int startFrame = note.getStartFrame();
+            const int endFrame = note.getEndFrame();
+            const int numFrames = endFrame - startFrame;
+
+            if (numFrames <= 0) continue;
+
+            const auto pristineDelta = note.getOriginalDeltaPitch();
+            if (pristineDelta.empty()) continue;
+
+            const auto context = buildAdjacentContext(project.getNotes(), note);
+
+            // Apply transformations in the correct order
+            const auto transformedDelta = applyAllTransformations(
+                pristineDelta,
+                note.getTiltLeft(),
+                note.getTiltRight(),
+                note.getVarianceScale(),
+                note.getSmoothLeftFrames(),
+                note.getSmoothRightFrames(),
+                note.getHighPassCutoff(),
+                context
+            );
+
+            for (int i = 0; i < numFrames; ++i)
+            {
+                const int globalIdx = startFrame + i;
+                if (globalIdx >= 0 && globalIdx < totalFrames)
+                    audioData.deltaPitch[static_cast<size_t>(globalIdx)] = transformedDelta[static_cast<size_t>(i)];
+            }
+        }
+
+        composeF0InPlace(project, /*applyUvMask=*/true);
     }
 
     void rebuildBaseFromNotesForDrag(Project& project, const std::vector<Note*>& affectedNotes)
@@ -353,7 +416,7 @@ namespace PitchCurveProcessor
         const int totalFrames = audioData.getNumFrames();
         ensureSizes(audioData, totalFrames);
 
-        // 1. Regenerate basePitch from ALL notes (needed for correct pitch display)
+        // Regenerate base pitch from ALL notes to account for pitch changes
         auto segments = collectNoteSegments(project.getNotes());
         if (!segments.empty())
         {
@@ -365,68 +428,36 @@ namespace PitchCurveProcessor
             audioData.basePitch.assign(static_cast<size_t>(totalFrames), 0.0f);
         }
 
-        // 2. Only rebuild deltaPitch for the affected notes (not all notes)
-        //    First, zero the affected range in the global deltaPitch array
-        int minFrame = totalFrames;
-        int maxFrame = 0;
-        for (auto* note : affectedNotes)
+        // Process delta pitch only for affected notes
+        for (auto* notePtr : affectedNotes)
         {
-            if (!note || note->isRest())
-                continue;
-            minFrame = std::min(minFrame, note->getStartFrame());
-            maxFrame = std::max(maxFrame, note->getEndFrame());
-        }
-        minFrame = std::max(0, minFrame);
-        maxFrame = std::min(totalFrames, maxFrame);
-        for (int i = minFrame; i < maxFrame; ++i)
-            audioData.deltaPitch[static_cast<size_t>(i)] = 0.0f;
+            if (!notePtr || notePtr->isRest()) continue;
 
-        const auto& allNotes = project.getNotes();
-        for (auto* note : affectedNotes)
-        {
-            if (!note || note->isRest())
-                continue;
-
-            const auto& rawSourceData = note->hasOriginalDeltaPitch() ? note->getOriginalDeltaPitch() : note->getDeltaPitch();
-            if (rawSourceData.empty())
-                continue;
-
-            const int startFrame = note->getStartFrame();
-            const int endFrame = note->getEndFrame();
+            const auto& note = *notePtr;
+            const int startFrame = note.getStartFrame();
+            const int endFrame = note.getEndFrame();
             const int numFrames = endFrame - startFrame;
-            if (numFrames <= 0)
-                continue;
 
-            std::vector<float> resampledBuf;
-            const std::vector<float>* sourceDataPtr = &rawSourceData;
-            if (static_cast<int>(rawSourceData.size()) != numFrames)
-            {
-                resampledBuf = CurveResampler::resampleLinear(rawSourceData, numFrames);
-                sourceDataPtr = &resampledBuf;
-            }
-            const auto& sourceData = *sourceDataPtr;
+            if (numFrames <= 0) continue;
 
-            auto adjacentContext = buildAdjacentContext(allNotes, *note);
+            const auto pristineDelta = note.getOriginalDeltaPitch();
+            if (pristineDelta.empty()) continue;
 
-            std::vector<float> transformedDelta = PitchToolOperations::applyAllTransformations(
-                sourceData,
-                note->getTiltLeft(),
-                note->getTiltRight(),
-                note->getVarianceScale(),
-                note->getSmoothLeftFrames(),
-                note->getSmoothRightFrames(),
-                adjacentContext
+            const auto context = buildAdjacentContext(project.getNotes(), note);
+
+            // Apply transformations in the correct order
+            const auto transformedDelta = applyAllTransformations(
+                pristineDelta,
+                note.getTiltLeft(),
+                note.getTiltRight(),
+                note.getVarianceScale(),
+                note.getSmoothLeftFrames(),
+                note.getSmoothRightFrames(),
+                note.getHighPassCutoff(),
+                context
             );
 
-            const float dScale = note->getDeltaScale();
-            const float dOffset = note->getDeltaOffset();
-            if (std::abs(dScale - 1.0f) > 0.0001f || std::abs(dOffset) > 0.0001f)
-            {
-                for (auto& v : transformedDelta)
-                    v = v * dScale + dOffset;
-            }
-
-            for (int i = 0; i < numFrames && i < static_cast<int>(transformedDelta.size()); ++i)
+            for (int i = 0; i < numFrames; ++i)
             {
                 const int globalIdx = startFrame + i;
                 if (globalIdx >= 0 && globalIdx < totalFrames)
@@ -434,138 +465,32 @@ namespace PitchCurveProcessor
             }
         }
 
-        // 3. Update baseF0 only for the affected range
-        audioData.baseF0.resize(static_cast<size_t>(totalFrames));
-        for (int i = minFrame; i < maxFrame; ++i)
-            audioData.baseF0[static_cast<size_t>(i)] = midiToFreq(audioData.basePitch[static_cast<size_t>(i)]);
+        // Determine the affected frame range
+        int minFrame = totalFrames;
+        int maxFrame = 0;
+        for (auto* notePtr : affectedNotes)
+        {
+            if (notePtr)
+            {
+                minFrame = std::min(minFrame, notePtr->getStartFrame());
+                maxFrame = std::max(maxFrame, notePtr->getEndFrame());
+            }
+        }
 
-        // 4. Recompose f0 only for the affected range (with padding for smoothing)
-        const int f0Start = std::max(0, minFrame - 60);
-        const int f0End = std::min(totalFrames, maxFrame + 60);
-        for (int i = f0Start; i < f0End; ++i)
+        // Only recompose f0 for the affected range
+        for (int i = std::max(0, minFrame); i < std::min(totalFrames, maxFrame); ++i)
         {
             const float base = audioData.basePitch[static_cast<size_t>(i)];
             const float delta = audioData.deltaPitch[static_cast<size_t>(i)];
             audioData.f0[static_cast<size_t>(i)] = midiToFreq(base + delta);
-        }
-    }
-
-    void rebuildDeltaForNotes(Project& project, const std::vector<Note*>& affectedNotes)
-    {
-        auto& audioData = project.getAudioData();
-        const int totalFrames = audioData.getNumFrames();
-        if (totalFrames <= 0 || affectedNotes.empty())
-            return;
-
-        const auto& allNotes = project.getNotes();
-        int minAffectedFrame = totalFrames;
-        int maxAffectedFrame = 0;
-
-        for (auto* note : affectedNotes)
-        {
-            if (!note || note->isRest())
-                continue;
-
-            const auto& rawSourceData = note->hasOriginalDeltaPitch()
-                ? note->getOriginalDeltaPitch() : note->getDeltaPitch();
-            if (rawSourceData.empty())
-                continue;
-
-            const int startFrame = note->getStartFrame();
-            const int endFrame = note->getEndFrame();
-            const int numFrames = endFrame - startFrame;
-            if (numFrames <= 0)
-                continue;
-
-            // If the note has been time-stretched, resample its stored delta
-            // to match the current output frame count.
-            std::vector<float> resampledBuf;
-            const std::vector<float>* sourceDataPtr = &rawSourceData;
-            if (static_cast<int>(rawSourceData.size()) != numFrames)
+            
+            // Apply uv mask if applicable
+            if (!audioData.voicedMask.empty() && 
+                static_cast<int>(audioData.voicedMask.size()) > i &&
+                !audioData.voicedMask[static_cast<size_t>(i)])
             {
-                resampledBuf = CurveResampler::resampleLinear(rawSourceData, numFrames);
-                sourceDataPtr = &resampledBuf;
-            }
-            const auto& sourceData = *sourceDataPtr;
-
-            // Build adjacent note context
-            auto adjacentContext = buildAdjacentContext(allNotes, *note);
-
-            std::vector<float> transformedDelta = PitchToolOperations::applyAllTransformations(
-                sourceData,
-                note->getTiltLeft(),
-                note->getTiltRight(),
-                note->getVarianceScale(),
-                note->getSmoothLeftFrames(),
-                note->getSmoothRightFrames(),
-                adjacentContext
-            );
-
-            // Apply per-note delta scale/offset
-            const float dScale = note->getDeltaScale();
-            const float dOffset = note->getDeltaOffset();
-            if (std::abs(dScale - 1.0f) > 0.0001f || std::abs(dOffset) > 0.0001f)
-            {
-                for (auto& v : transformedDelta)
-                    v = v * dScale + dOffset;
-            }
-
-            minAffectedFrame = std::min(minAffectedFrame, startFrame);
-            maxAffectedFrame = std::max(maxAffectedFrame, endFrame);
-
-            for (int i = 0; i < numFrames && i < static_cast<int>(transformedDelta.size()); ++i)
-            {
-                const int globalIdx = startFrame + i;
-                if (globalIdx >= 0 && globalIdx < totalFrames)
-                    audioData.deltaPitch[static_cast<size_t>(globalIdx)] = transformedDelta[static_cast<size_t>(i)];
+                audioData.f0[static_cast<size_t>(i)] = 0.0f;
             }
         }
-
-        // Recompose f0 only for affected range
-        if (minAffectedFrame < maxAffectedFrame)
-        {
-            const int rangeStart = std::max(0, minAffectedFrame);
-            const int rangeEnd = std::min(totalFrames, maxAffectedFrame);
-            for (int i = rangeStart; i < rangeEnd; ++i)
-            {
-                const float base = audioData.basePitch[static_cast<size_t>(i)];
-                const float delta = audioData.deltaPitch[static_cast<size_t>(i)];
-                audioData.f0[static_cast<size_t>(i)] = midiToFreq(base + delta);
-            }
-        }
-    }
-
-    std::vector<float> composeF0(const Project& project,
-                                 bool applyUvMask,
-                                 float globalPitchOffset)
-    {
-        const auto& audioData = project.getAudioData();
-        const int totalFrames = static_cast<int>(audioData.basePitch.size());
-        std::vector<float> result(static_cast<size_t>(totalFrames), 0.0f);
-
-        for (int i = 0; i < totalFrames; ++i)
-        {
-            bool isVoiced = (i < static_cast<int>(audioData.voicedMask.size())) ? audioData.voicedMask[i] : true;
-            if (applyUvMask && !isVoiced)
-                continue;
-
-            const float base = audioData.basePitch[static_cast<size_t>(i)];
-            const float delta = (i < static_cast<int>(audioData.deltaPitch.size()))
-                                    ? audioData.deltaPitch[static_cast<size_t>(i)]
-                                    : 0.0f;
-            const float midi = base + delta + globalPitchOffset;
-            result[static_cast<size_t>(i)] = midiToFreq(midi);
-        }
-
-        return result;
-    }
-
-    void composeF0InPlace(Project& project,
-                          bool applyUvMask,
-                          float globalPitchOffset)
-    {
-        auto composed = composeF0(project, applyUvMask, globalPitchOffset);
-        auto& audioData = project.getAudioData();
-        audioData.f0 = std::move(composed);
     }
 } // namespace PitchCurveProcessor

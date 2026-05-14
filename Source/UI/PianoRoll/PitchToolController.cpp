@@ -208,6 +208,19 @@ void PitchToolController::applyOperation(std::vector<Note*>& notes,
         note->setMidiNote(origParams.midiNote + currentTiltMean);
         break;
       }
+      case PitchToolHandles::HandleType::HighPassFlatten:
+      {
+        // Drag DOWN (positive Y) = increase flattening, drag UP (negative Y) = decrease
+        // 反转方向：向下拖动增加平直化，向上拖动减少平直化
+        const float dragDelta = dragDeltaY / 200.0f;  // 反转了符号，原来使用 -dragDeltaY
+        const float newCutoff = juce::jlimit(0.0f, 1.0f, origParams.highPassCutoff + dragDelta);
+        note->setHighPassCutoff(newCutoff);
+        
+        // Preserve tilt offset when adjusting high-pass filter
+        const float currentTiltMean = (note->getTiltLeft() + note->getTiltRight()) / 2.0f;
+        note->setMidiNote(origParams.midiNote + currentTiltMean);
+        break;
+      }
       case PitchToolHandles::HandleType::None:
       default:
         continue;  // Skip this note

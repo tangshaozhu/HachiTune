@@ -16,6 +16,7 @@ public:
     ReduceVariance,
     SmoothLeft,
     SmoothRight,
+    HighPassFlatten,  // 新增高通滤波手柄
     None
   };
 

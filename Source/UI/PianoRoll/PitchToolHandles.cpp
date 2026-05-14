@@ -70,6 +70,9 @@ void PitchToolHandles::updateHandles(const std::vector<Note*>& selectedNotes,
 
   // 5. Smooth Right: Top-Right corner
   addHandle(HandleType::SmoothRight, rightX, topY);
+  
+  // 6. High Pass Flatten: Bottom-Right corner (右下角)
+  addHandle(HandleType::HighPassFlatten, rightX, bottomY);
 }
 
 void PitchToolHandles::draw(juce::Graphics& g) const {
@@ -116,20 +119,22 @@ void PitchToolHandles::addHandle(HandleType type, float worldX, float worldY, No
   handles.push_back(h);
 }
 
-juce::Colour PitchToolHandles::getColorForType(HandleType type) const {
+juce::Colour PitchToolHandles::getColorForType(PitchToolHandles::HandleType type) const {
   switch (type) {
     case HandleType::TiltLeft:
+      return juce::Colours::cyan;
     case HandleType::TiltRight:
-      return juce::Colours::orange;
-      
+      return juce::Colours::cyan;
     case HandleType::ReduceVariance:
-      return juce::Colours::mediumpurple; // "Reduce" implies constraint -> purple/magenta
-      
+      return juce::Colours::yellow;
     case HandleType::SmoothLeft:
+      return juce::Colours::orange;
     case HandleType::SmoothRight:
-      return juce::Colours::cyan; // "Smooth" implies liquid/soft -> cyan/blue
-      
-    default:
+      return juce::Colours::orange;
+    case HandleType::HighPassFlatten:  // 新增高通滤波手柄颜色
+      return juce::Colours::green;
+    case HandleType::None:
       return juce::Colours::white;
   }
+  return juce::Colours::white;
 }

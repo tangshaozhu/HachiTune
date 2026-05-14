@@ -1,5 +1,6 @@
 #include "PitchToolOperations.h"
-
+#include "../Models/Note.h"
+#include "Constants.h"  // 添加这一行以引入midiToFreq函数
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -145,6 +146,7 @@ std::vector<float> applyAllTransformations(const std::vector<float>& originalDel
                                            float varianceScale,
                                            int smoothLeftFrames,
                                            int smoothRightFrames,
+                                           float highPassCutoff,
                                            const AdjacentNoteContext& adjacentContext) {
   if (originalDelta.empty()) {
     return {};
@@ -153,13 +155,7 @@ std::vector<float> applyAllTransformations(const std::vector<float>& originalDel
   // Start with the original pristine curve
   std::vector<float> result = originalDelta;
 
-  // 1. Apply variance scaling
-  // Variance first so that tilt ramp is preserved even at variance=0
-  if (std::abs(varianceScale - 1.0f) > 0.001f) {
-    result = reduceVariance(result, varianceScale);
-  }
-
-  // 2. Apply tilt transformations (combined left + right)
+  // 1. Apply tilt transformations (combined left + right)
   // TiltLeft: pivot at right (1.0), negative amount
   if (std::abs(tiltLeft) > 0.001f) {
     result = tiltDeltaPitch(result, 1.0f, -tiltLeft);
@@ -170,7 +166,30 @@ std::vector<float> applyAllTransformations(const std::vector<float>& originalDel
     result = tiltDeltaPitch(result, 0.0f, tiltRight);
   }
 
-  // 3. Apply boundary smoothing
+  // 2. Apply variance scaling
+  if (std::abs(varianceScale - 1.0f) > 0.001f) {
+    result = reduceVariance(result, varianceScale);
+  }
+
+  // 3. Apply high-pass flattening if needed
+  if (std::abs(highPassCutoff) > 0.001f) {
+    // Convert delta pitch back to F0 for processing
+    std::vector<float> f0Curve(result.size());
+    const float basePitch = 0.0f;  // We're working with delta from base
+    for (size_t i = 0; i < result.size(); ++i) {
+        f0Curve[i] = std::pow(2.0f, result[i] / 12.0f) * midiToFreq(basePitch);
+    }
+    
+    // Apply high-pass filter
+    auto filteredF0 = highPassFlatten(f0Curve, highPassCutoff);
+    
+    // Convert back to delta pitch
+    for (size_t i = 0; i < result.size(); ++i) {
+        result[i] = 12.0f * std::log2(std::max(filteredF0[i], 1e-6f) / midiToFreq(basePitch));
+    }
+  }
+
+  // 4. Apply boundary smoothing AFTER variance scaling and high-pass filtering
   if (smoothLeftFrames > 0) {
     const float leftTarget = adjacentContext.hasLeft ? adjacentContext.leftBoundaryDelta : 0.0f;
     result = smoothBoundary(result, 0, smoothLeftFrames, leftTarget);
@@ -182,6 +201,67 @@ std::vector<float> applyAllTransformations(const std::vector<float>& originalDel
   }
 
   return result;
+}
+
+// 新增：一阶高通滤波平直化算法，模拟Autotune的行为
+std::vector<float> highPassFlatten(const std::vector<float>& f0Curve, float cutoffRatio) {
+    if (f0Curve.empty()) {
+        return f0Curve;
+    }
+    
+    if (cutoffRatio <= 0.0f) {
+        return f0Curve;  // 不滤波，返回原曲线
+    }
+    
+    if (cutoffRatio >= 1.0f) {
+        // 完全滤波，返回均值
+        const float mean = std::accumulate(f0Curve.begin(), f0Curve.end(), 0.0f) / static_cast<float>(f0Curve.size());
+        return std::vector<float>(f0Curve.size(), mean);
+    }
+    
+    // 计算原始曲线的均值作为基准
+    const float originalMean = std::accumulate(f0Curve.begin(), f0Curve.end(), 0.0f) / static_cast<float>(f0Curve.size());
+    
+    // 将曲线转换为围绕0的偏差值
+    std::vector<float> centeredCurve = f0Curve;
+    for (auto& val : centeredCurve) {
+        val -= originalMean;
+    }
+    
+    // 对中心化的曲线应用一阶高通滤波
+    std::vector<float> result = centeredCurve;
+    const size_t n = centeredCurve.size();
+    
+    // 使用一阶高通滤波器，保留原始起点值
+    // 高通滤波器形式: y[n] = alpha * (y[n-1] + x[n] - x[n-1])
+    const float alpha = 1.0f - cutoffRatio;
+    
+    // 从第二点开始应用滤波器
+    for (size_t i = 1; i < n; ++i) {
+        // 应用一阶高通滤波
+        result[i] = alpha * (result[i-1] + centeredCurve[i] - centeredCurve[i-1]);
+    }
+    
+    // 将基准均值加回去
+    for (auto& val : result) {
+        val += originalMean;
+    }
+    
+    // 如果需要，可以对结果进行后处理以改善右端点对齐
+    if (cutoffRatio > 0.5f) {
+        // 对最后几个点进行轻微平滑以避免右端点跳跃
+        const size_t smoothLength = std::min(static_cast<size_t>(n / 10), static_cast<size_t>(10));
+        if (smoothLength > 1 && n > smoothLength * 2) {
+            // 使用线性插值平滑最后几个点
+            const float target = std::accumulate(result.end() - smoothLength, result.end(), 0.0f) / static_cast<float>(smoothLength);
+            for (size_t i = n - smoothLength; i < n; ++i) {
+                const float t = static_cast<float>(i - (n - smoothLength)) / static_cast<float>(smoothLength);
+                result[i] = result[i] * (1.0f - t) + target * t;
+            }
+        }
+    }
+    
+    return result;
 }
 
 } // namespace PitchToolOperations

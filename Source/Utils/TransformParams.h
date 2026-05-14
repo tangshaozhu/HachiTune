@@ -13,6 +13,7 @@ struct TransformParams
     float varianceScale = 1.0f;
     int smoothLeftFrames = 0;
     int smoothRightFrames = 0;
+    float highPassCutoff = 0.0f;  // 高通滤波参数
     float midiNote = 0.0f;
     float deltaScale = 1.0f;
     float deltaOffset = 0.0f;
@@ -28,6 +29,7 @@ struct TransformParams
         p.varianceScale = note.getVarianceScale();
         p.smoothLeftFrames = note.getSmoothLeftFrames();
         p.smoothRightFrames = note.getSmoothRightFrames();
+        p.highPassCutoff = note.getHighPassCutoff();  // 添加高通滤波参数获取
         p.midiNote = note.getMidiNote();
         p.deltaScale = note.getDeltaScale();
         p.deltaOffset = note.getDeltaOffset();
@@ -43,6 +45,7 @@ struct TransformParams
         note.setVarianceScale(varianceScale);
         note.setSmoothLeftFrames(smoothLeftFrames);
         note.setSmoothRightFrames(smoothRightFrames);
+        note.setHighPassCutoff(highPassCutoff);  // 添加高通滤波参数应用
         note.setDeltaScale(deltaScale);
         note.setDeltaOffset(deltaOffset);
     }

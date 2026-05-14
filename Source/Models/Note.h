@@ -88,6 +88,8 @@ public:
     void setSmoothLeftFrames(int frames) { smoothLeftFrames = frames; }
     int getSmoothRightFrames() const { return smoothRightFrames; }
     void setSmoothRightFrames(int frames) { smoothRightFrames = frames; }
+    float getHighPassCutoff() const { return highPassCutoff; }
+    void setHighPassCutoff(float cutoff) { highPassCutoff = cutoff; }
 
     // Delta scale/offset (post-transformation, from delta control handles)
     float getDeltaScale() const { return deltaScale; }
@@ -198,6 +200,7 @@ private:
     float varianceScale = 1.0f;      // Variance scaling factor (1.0=unchanged, 0.0=flat, >1.0=amplify, <0.0=invert)
     int smoothLeftFrames = 0;        // Smoothing transition length at left boundary
     int smoothRightFrames = 0;       // Smoothing transition length at right boundary
+    float highPassCutoff = 0.0f;     // High-pass filter cutoff ratio for flattening (0.0=no effect, 1.0=fully flat)
 
     // Post-transformation scale/offset from delta control handles
     float deltaScale = 1.0f;        // Applied after all other transformations (1.0=unchanged)
