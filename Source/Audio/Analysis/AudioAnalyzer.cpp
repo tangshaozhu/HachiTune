@@ -427,8 +427,7 @@ void AudioAnalyzer::segmentWithGAME(Project &project)
       std::vector<float> clip;
       clip.reserve(static_cast<size_t>(endSample - startSample));
       const float *src = audioData.waveform.getReadPointer(0);
-      for (int i = startSample; i < endSample; ++i)
-        clip.push_back(src[i]);
+      clip.insert(clip.end(), src + startSample, src + endSample);
       note.setClipWaveform(std::move(clip));
     }
 
@@ -444,8 +443,7 @@ void AudioAnalyzer::segmentWithGAME(Project &project)
       std::vector<float> srcClip;
       srcClip.reserve(static_cast<size_t>(endSample - startSample));
       const float *origSrc = audioData.originalWaveform.getReadPointer(0);
-      for (int i = startSample; i < endSample; ++i)
-        srcClip.push_back(origSrc[i]);
+      srcClip.insert(srcClip.end(), origSrc + startSample, origSrc + endSample);
       note.setSrcClipWaveform(std::move(srcClip));
     }
 
