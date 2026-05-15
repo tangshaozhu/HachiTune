@@ -368,12 +368,17 @@ void AudioAnalyzer::segmentWithGAME(Project &project)
   int numSamples = audioData.waveform.getNumSamples();
   const int f0Size = static_cast<int>(audioData.f0.size());
   const int melSize = static_cast<int>(audioData.melSpectrogram.size());
+  const int numWaveformSamples = audioData.waveform.getNumSamples();
+  const int numOriginalWaveformSamples = audioData.originalWaveform.getNumSamples();
 
   auto *detector = gameDetector ? gameDetector.get() : externalGAMEDetector;
 
   // GAME detectNotes takes the full waveform at its own sample rate
   auto gameNotes = detector->detectNotes(samples, numSamples,
                                          GAMEDetector::SAMPLE_RATE);
+
+  // 预估notes数量，预留容量以减少重新分配
+  notes.reserve(notes.size() + gameNotes.size());
 
   for (const auto &gNote : gameNotes)
   {
@@ -411,16 +416,14 @@ void AudioAnalyzer::segmentWithGAME(Project &project)
     note.setF0Values(std::move(f0Values));
 
     // Extract waveform clip for this note
-    if (audioData.waveform.getNumSamples() > 0)
+    if (numWaveformSamples > 0)
     {
       int startSample = f0Start * HOP_SIZE;
       int endSample = f0End * HOP_SIZE;
       startSample =
-          std::max(0, std::min(startSample,
-                               audioData.waveform.getNumSamples()));
+          std::max(0, std::min(startSample, numWaveformSamples));
       endSample = std::max(startSample,
-                           std::min(endSample,
-                                    audioData.waveform.getNumSamples()));
+                           std::min(endSample, numWaveformSamples));
       std::vector<float> clip;
       clip.reserve(static_cast<size_t>(endSample - startSample));
       const float *src = audioData.waveform.getReadPointer(0);
@@ -430,16 +433,14 @@ void AudioAnalyzer::segmentWithGAME(Project &project)
     }
 
     // Extract source clip waveform from originalWaveform (immutable original audio)
-    if (audioData.originalWaveform.getNumSamples() > 0)
+    if (numOriginalWaveformSamples > 0)
     {
       int startSample = f0Start * HOP_SIZE;
       int endSample = f0End * HOP_SIZE;
       startSample =
-          std::max(0, std::min(startSample,
-                               audioData.originalWaveform.getNumSamples()));
+          std::max(0, std::min(startSample, numOriginalWaveformSamples));
       endSample = std::max(startSample,
-                           std::min(endSample,
-                                    audioData.originalWaveform.getNumSamples()));
+                           std::min(endSample, numOriginalWaveformSamples));
       std::vector<float> srcClip;
       srcClip.reserve(static_cast<size_t>(endSample - startSample));
       const float *origSrc = audioData.originalWaveform.getReadPointer(0);
