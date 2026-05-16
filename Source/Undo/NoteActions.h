@@ -3,6 +3,9 @@
 #include "UndoableAction.h"
 #include "../Models/Note.h"
 #include "../Models/Project.h"
+#include "../Utils/BasePitchCurve.h"
+#include "../Utils/PitchCurveProcessor.h"
+#include "../Utils/Constants.h"
 #include <vector>
 #include <functional>
 
@@ -326,6 +329,95 @@ public:
                 break;
             }
         }
+        
+        // CRITICAL: After restoring the original note, rebuild basePitch and deltaPitch
+        // This ensures data consistency, same as NoteSplitter's approach
+        {
+            auto& audioData = project->getAudioData();
+            const int totalFrames = audioData.getNumFrames();
+            
+            // Step 1: Build note segments for base pitch generation
+            std::vector<BasePitchCurve::NoteSegment> segments;
+            const auto& notes = project->getNotes();
+            segments.reserve(notes.size());
+            for (const auto& n : notes) {
+                if (n.isRest()) continue;
+                
+                BasePitchCurve::NoteSegment seg;
+                seg.startFrame = n.getStartFrame();
+                seg.endFrame = n.getEndFrame();
+                seg.midiNote = n.getMidiNote() + n.getPitchOffset()
+                             - (n.getTiltLeft() + n.getTiltRight()) / 2.0f;
+                segments.push_back(seg);
+            }
+            
+            std::sort(segments.begin(), segments.end(),
+                      [](const auto& a, const auto& b) { return a.startFrame < b.startFrame; });
+            
+            // Step 2: Regenerate basePitch from notes
+            if (!segments.empty()) {
+                audioData.basePitch = BasePitchCurve::generateForNotes(segments, totalFrames);
+            }
+            
+            // Step 3: Rebuild deltaPitch from Note objects (same as rebuildBaseFromNotes)
+            // Clear global deltaPitch first
+            audioData.deltaPitch.assign(static_cast<size_t>(totalFrames), 0.0f);
+            
+            for (auto& n : project->getNotes()) {
+                if (n.isRest()) continue;
+                
+                const int startFrame = n.getStartFrame();
+                const int endFrame = n.getEndFrame();
+                const int numFrames = endFrame - startFrame;
+                
+                if (numFrames <= 0) continue;
+                
+                const auto pristineDelta = n.getOriginalDeltaPitch();
+                if (pristineDelta.empty()) continue;
+                
+                // For now, just copy the original delta directly without transformations
+                // (tilt/variance/smoothing are applied in rebuildBaseFromNotes but we keep it simple here)
+                for (int i = 0; i < numFrames && i < static_cast<int>(pristineDelta.size()); ++i) {
+                    const int globalIdx = startFrame + i;
+                    if (globalIdx >= 0 && globalIdx < totalFrames) {
+                        audioData.deltaPitch[static_cast<size_t>(globalIdx)] = pristineDelta[static_cast<size_t>(i)];
+                    }
+                }
+            }
+            
+            // Step 4: Update cached baseF0
+            audioData.baseF0.resize(static_cast<size_t>(totalFrames));
+            for (int i = 0; i < totalFrames; ++i) {
+                audioData.baseF0[static_cast<size_t>(i)] = midiToFreq(audioData.basePitch[static_cast<size_t>(i)]);
+            }
+            
+            // Step 5: Sync global deltaPitch back to each note's deltaPitch vectors
+            for (auto& n : project->getNotes()) {
+                if (n.isRest()) continue;
+                
+                const int startFrame = n.getStartFrame();
+                const int endFrame = n.getEndFrame();
+                const int numFrames = endFrame - startFrame;
+                
+                if (numFrames <= 0) continue;
+                
+                std::vector<float> noteDelta(static_cast<size_t>(numFrames));
+                for (int i = 0; i < numFrames; ++i) {
+                    const int globalIdx = startFrame + i;
+                    if (globalIdx >= 0 && globalIdx < totalFrames) {
+                        noteDelta[static_cast<size_t>(i)] = audioData.deltaPitch[static_cast<size_t>(globalIdx)];
+                    }
+                }
+                
+                n.setOriginalDeltaPitch(noteDelta);
+                n.setDeltaPitch(noteDelta);
+            }
+            
+            // CRITICAL: Recompose F0 from basePitch and deltaPitch
+            // This ensures f0 array is synchronized with the rebuilt data
+            PitchCurveProcessor::composeF0InPlace(*project, /*applyUvMask=*/false);
+        }
+        
         if (onChanged)
             onChanged();
     }
@@ -334,6 +426,8 @@ public:
     {
         if (!project)
             return;
+        
+        // Restore first note from snapshot
         for (auto &note : project->getNotes())
         {
             if (note.getStartFrame() == originalNote.getStartFrame())
@@ -342,7 +436,141 @@ public:
                 break;
             }
         }
+        
+        // Add second note
         project->addNote(secondNote);
+        
+        // CRITICAL: After splitting, recalculate midiNote based on average F0 for both notes
+        // This matches the behavior in NoteSplitter::splitNoteAtFrame
+        {
+            auto& audioData = project->getAudioData();
+            
+            // For first note (left part) - find it by startFrame
+            for (auto& n : project->getNotes()) {
+                if (n.getStartFrame() == firstNote.getStartFrame()) {
+                    const int startFrame = n.getStartFrame();
+                    const int endFrame = n.getEndFrame();
+                    
+                    if (!audioData.f0.empty() && endFrame > startFrame) {
+                        float sumF0Midi = 0.0f;
+                        int validCount = 0;
+                        
+                        for (int i = startFrame; i < endFrame && i < static_cast<int>(audioData.f0.size()); ++i) {
+                            if (audioData.f0[static_cast<size_t>(i)] > 0.0f) {
+                                sumF0Midi += freqToMidi(audioData.f0[static_cast<size_t>(i)]);
+                                validCount++;
+                            }
+                        }
+                        
+                        if (validCount > 0) {
+                            const float avgF0Midi = sumF0Midi / static_cast<float>(validCount);
+                            n.setMidiNote(avgF0Midi);
+                            n.setPitchOffset(0.0f);
+                        }
+                    }
+                    break;
+                }
+            }
+            
+            // For second note (right part) - find it by startFrame
+            for (auto& n : project->getNotes()) {
+                if (n.getStartFrame() == secondNote.getStartFrame()) {
+                    const int startFrame = n.getStartFrame();
+                    const int endFrame = n.getEndFrame();
+                    
+                    if (!audioData.f0.empty() && endFrame > startFrame) {
+                        float sumF0Midi = 0.0f;
+                        int validCount = 0;
+                        
+                        for (int i = startFrame; i < endFrame && i < static_cast<int>(audioData.f0.size()); ++i) {
+                            if (audioData.f0[static_cast<size_t>(i)] > 0.0f) {
+                                sumF0Midi += freqToMidi(audioData.f0[static_cast<size_t>(i)]);
+                                validCount++;
+                            }
+                        }
+                        
+                        if (validCount > 0) {
+                            const float avgF0Midi = sumF0Midi / static_cast<float>(validCount);
+                            n.setMidiNote(avgF0Midi);
+                            n.setPitchOffset(0.0f);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        
+        // CRITICAL: After splitting the note, rebuild basePitch and deltaPitch
+        // This ensures data consistency, same as NoteSplitter's approach
+        {
+            auto& audioData = project->getAudioData();
+            const int totalFrames = audioData.getNumFrames();
+            
+            // Step 1: Build note segments for base pitch generation
+            std::vector<BasePitchCurve::NoteSegment> segments;
+            const auto& notes = project->getNotes();
+            segments.reserve(notes.size());
+            for (const auto& n : notes) {
+                if (n.isRest()) continue;
+                
+                BasePitchCurve::NoteSegment seg;
+                seg.startFrame = n.getStartFrame();
+                seg.endFrame = n.getEndFrame();
+                seg.midiNote = n.getMidiNote() + n.getPitchOffset()
+                             - (n.getTiltLeft() + n.getTiltRight()) / 2.0f;
+                segments.push_back(seg);
+            }
+            
+            std::sort(segments.begin(), segments.end(),
+                      [](const auto& a, const auto& b) { return a.startFrame < b.startFrame; });
+            
+            // Step 2: Regenerate basePitch from notes
+            if (!segments.empty()) {
+                audioData.basePitch = BasePitchCurve::generateForNotes(segments, totalFrames);
+            }
+            
+            // Step 3: Recalculate deltaPitch from f0 and new basePitch (NOT from originalDeltaPitch)
+            // This ensures consistency after midiNote adjustment
+            audioData.deltaPitch.resize(static_cast<size_t>(totalFrames));
+            for (int i = 0; i < totalFrames; ++i) {
+                const float baseMidi = audioData.basePitch[static_cast<size_t>(i)];
+                const float f0Midi = freqToMidi(audioData.f0[static_cast<size_t>(i)]);
+                audioData.deltaPitch[static_cast<size_t>(i)] = f0Midi - baseMidi;
+            }
+            
+            // Step 4: Update cached baseF0
+            audioData.baseF0.resize(static_cast<size_t>(totalFrames));
+            for (int i = 0; i < totalFrames; ++i) {
+                audioData.baseF0[static_cast<size_t>(i)] = midiToFreq(audioData.basePitch[static_cast<size_t>(i)]);
+            }
+            
+            // Step 5: Sync global deltaPitch back to each note's deltaPitch vectors
+            for (auto& n : project->getNotes()) {
+                if (n.isRest()) continue;
+                
+                const int startFrame = n.getStartFrame();
+                const int endFrame = n.getEndFrame();
+                const int numFrames = endFrame - startFrame;
+                
+                if (numFrames <= 0) continue;
+                
+                std::vector<float> noteDelta(static_cast<size_t>(numFrames));
+                for (int i = 0; i < numFrames; ++i) {
+                    const int globalIdx = startFrame + i;
+                    if (globalIdx >= 0 && globalIdx < totalFrames) {
+                        noteDelta[static_cast<size_t>(i)] = audioData.deltaPitch[static_cast<size_t>(globalIdx)];
+                    }
+                }
+                
+                n.setOriginalDeltaPitch(noteDelta);
+                n.setDeltaPitch(noteDelta);
+            }
+            
+            // CRITICAL: Recompose F0 from basePitch and deltaPitch
+            // This ensures f0 array is synchronized with the rebuilt data
+            PitchCurveProcessor::composeF0InPlace(*project, /*applyUvMask=*/false);
+        }
+        
         if (onChanged)
             onChanged();
     }
