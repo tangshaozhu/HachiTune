@@ -545,8 +545,16 @@ bool NoteSplitter::mergeNotes(Note* leftNote, Note* rightNote) {
         audioData.deltaPitch.resize(static_cast<size_t>(totalFrames));
         for (int i = 0; i < totalFrames; ++i) {
             const float baseMidi = audioData.basePitch[static_cast<size_t>(i)];
-            const float f0Midi = freqToMidi(audioData.f0[static_cast<size_t>(i)]);
-            audioData.deltaPitch[static_cast<size_t>(i)] = f0Midi - baseMidi;
+            // CRITICAL: Skip non-voiced regions to avoid computing deltaPitch from F0=0
+            if (i < static_cast<int>(audioData.voicedMask.size()) && 
+                audioData.voicedMask[static_cast<size_t>(i)] && 
+                audioData.f0[static_cast<size_t>(i)] > 0.0f) {
+                const float f0Midi = freqToMidi(audioData.f0[static_cast<size_t>(i)]);
+                audioData.deltaPitch[static_cast<size_t>(i)] = f0Midi - baseMidi;
+            } else {
+                // For non-voiced regions, keep deltaPitch at 0 to avoid extreme negative values
+                audioData.deltaPitch[static_cast<size_t>(i)] = 0.0f;
+            }
         }
         
         // Step 4: Update cached baseF0
@@ -577,8 +585,8 @@ bool NoteSplitter::mergeNotes(Note* leftNote, Note* rightNote) {
             n.setDeltaPitch(noteDelta);
         }
         
-        // CRITICAL: Recompose F0 from basePitch and deltaPitch
-        PitchCurveProcessor::composeF0InPlace(*project, /*applyUvMask=*/false);
+        // CRITICAL: Recompose F0 from basePitch and deltaPitch (apply UV mask to hide non-voiced regions)
+        PitchCurveProcessor::composeF0InPlace(*project, /*applyUvMask=*/true);
     }
     
     // Add to undo manager

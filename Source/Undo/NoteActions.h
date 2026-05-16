@@ -412,10 +412,8 @@ public:
                 n.setOriginalDeltaPitch(noteDelta);
                 n.setDeltaPitch(noteDelta);
             }
-            
-            // CRITICAL: Recompose F0 from basePitch and deltaPitch
-            // This ensures f0 array is synchronized with the rebuilt data
-            PitchCurveProcessor::composeF0InPlace(*project, /*applyUvMask=*/false);
+            // CRITICAL: Recompose F0 from basePitch and deltaPitch (apply UV mask to hide non-voiced regions)
+            PitchCurveProcessor::composeF0InPlace(*project, /*applyUvMask=*/true);
         }
         
         if (onChanged)
@@ -456,9 +454,10 @@ public:
                         int validCount = 0;
                         
                         for (int i = startFrame; i < endFrame && i < static_cast<int>(audioData.f0.size()); ++i) {
-                            // Only count voiced frames with valid F0 (skip non-voiced regions where F0 may be 0 or interpolated)
+                            // CRITICAL: Check voicedMask to avoid including non-voiced regions (F0=0) in average calculation
                             if (i < static_cast<int>(audioData.voicedMask.size()) && 
-                                audioData.voicedMask[i] && audioData.f0[static_cast<size_t>(i)] > 0.0f) {
+                                audioData.voicedMask[static_cast<size_t>(i)] && 
+                                audioData.f0[static_cast<size_t>(i)] > 0.0f) {
                                 sumF0Midi += freqToMidi(audioData.f0[static_cast<size_t>(i)]);
                                 validCount++;
                             }
@@ -660,8 +659,16 @@ public:
             audioData.deltaPitch.resize(static_cast<size_t>(totalFrames));
             for (int i = 0; i < totalFrames; ++i) {
                 const float baseMidi = audioData.basePitch[static_cast<size_t>(i)];
-                const float f0Midi = freqToMidi(audioData.f0[static_cast<size_t>(i)]);
-                audioData.deltaPitch[static_cast<size_t>(i)] = f0Midi - baseMidi;
+                // CRITICAL: Skip non-voiced regions to avoid computing deltaPitch from F0=0
+                if (i < static_cast<int>(audioData.voicedMask.size()) && 
+                    audioData.voicedMask[static_cast<size_t>(i)] && 
+                    audioData.f0[static_cast<size_t>(i)] > 0.0f) {
+                    const float f0Midi = freqToMidi(audioData.f0[static_cast<size_t>(i)]);
+                    audioData.deltaPitch[static_cast<size_t>(i)] = f0Midi - baseMidi;
+                } else {
+                    // For non-voiced regions, keep deltaPitch at 0 to avoid extreme negative values
+                    audioData.deltaPitch[static_cast<size_t>(i)] = 0.0f;
+                }
             }
             
             // Step 4: Update cached baseF0
@@ -692,8 +699,8 @@ public:
                 n.setDeltaPitch(noteDelta);
             }
             
-            // CRITICAL: Recompose F0 from basePitch and deltaPitch
-            PitchCurveProcessor::composeF0InPlace(*project, /*applyUvMask=*/false);
+            // CRITICAL: Recompose F0 from basePitch and deltaPitch (apply UV mask to hide non-voiced regions)
+            PitchCurveProcessor::composeF0InPlace(*project, /*applyUvMask=*/true);
         }
         
         if (onChanged)
@@ -754,7 +761,10 @@ public:
                         int validCount = 0;
                         
                         for (int i = startFrame; i < endFrame && i < static_cast<int>(audioData.f0.size()); ++i) {
-                            if (audioData.f0[static_cast<size_t>(i)] > 0.0f) {
+                            // CRITICAL: Check voicedMask to avoid including non-voiced regions (F0=0) in average calculation
+                            if (i < static_cast<int>(audioData.voicedMask.size()) && 
+                                audioData.voicedMask[static_cast<size_t>(i)] && 
+                                audioData.f0[static_cast<size_t>(i)] > 0.0f) {
                                 sumF0Midi += freqToMidi(audioData.f0[static_cast<size_t>(i)]);
                                 validCount++;
                             }
@@ -768,6 +778,82 @@ public:
                     }
                 }
             }
+        }
+        
+        // CRITICAL: After merging, rebuild basePitch and deltaPitch (same as NoteSplitter::mergeNotes)
+        {
+            auto& audioData = project->getAudioData();
+            const int totalFrames = audioData.getNumFrames();
+            
+            // Step 1: Build note segments for base pitch generation
+            std::vector<BasePitchCurve::NoteSegment> segments;
+            const auto& notes = project->getNotes();
+            segments.reserve(notes.size());
+            for (const auto& n : notes) {
+                if (n.isRest()) continue;
+                
+                BasePitchCurve::NoteSegment seg;
+                seg.startFrame = n.getStartFrame();
+                seg.endFrame = n.getEndFrame();
+                seg.midiNote = n.getMidiNote() + n.getPitchOffset()
+                             - (n.getTiltLeft() + n.getTiltRight()) / 2.0f;
+                segments.push_back(seg);
+            }
+            
+            std::sort(segments.begin(), segments.end(),
+                      [](const auto& a, const auto& b) { return a.startFrame < b.startFrame; });
+            
+            // Step 2: Regenerate basePitch from notes
+            if (!segments.empty()) {
+                audioData.basePitch = BasePitchCurve::generateForNotes(segments, totalFrames);
+            }
+            
+            // Step 3: Recalculate deltaPitch from f0 and new basePitch
+            audioData.deltaPitch.resize(static_cast<size_t>(totalFrames));
+            for (int i = 0; i < totalFrames; ++i) {
+                const float baseMidi = audioData.basePitch[static_cast<size_t>(i)];
+                // CRITICAL: Skip non-voiced regions to avoid computing deltaPitch from F0=0
+                if (i < static_cast<int>(audioData.voicedMask.size()) && 
+                    audioData.voicedMask[static_cast<size_t>(i)] && 
+                    audioData.f0[static_cast<size_t>(i)] > 0.0f) {
+                    const float f0Midi = freqToMidi(audioData.f0[static_cast<size_t>(i)]);
+                    audioData.deltaPitch[static_cast<size_t>(i)] = f0Midi - baseMidi;
+                } else {
+                    // For non-voiced regions, keep deltaPitch at 0 to avoid extreme negative values
+                    audioData.deltaPitch[static_cast<size_t>(i)] = 0.0f;
+                }
+            }
+            
+            // Step 4: Update cached baseF0
+            audioData.baseF0.resize(static_cast<size_t>(totalFrames));
+            for (int i = 0; i < totalFrames; ++i) {
+                audioData.baseF0[static_cast<size_t>(i)] = midiToFreq(audioData.basePitch[static_cast<size_t>(i)]);
+            }
+            
+            // Step 5: Sync global deltaPitch back to each note's deltaPitch vectors
+            for (auto& n : project->getNotes()) {
+                if (n.isRest()) continue;
+                
+                const int startFrame = n.getStartFrame();
+                const int endFrame = n.getEndFrame();
+                const int numFrames = endFrame - startFrame;
+                
+                if (numFrames <= 0) continue;
+                
+                std::vector<float> noteDelta(static_cast<size_t>(numFrames));
+                for (int i = 0; i < numFrames; ++i) {
+                    const int globalIdx = startFrame + i;
+                    if (globalIdx >= 0 && globalIdx < totalFrames) {
+                        noteDelta[static_cast<size_t>(i)] = audioData.deltaPitch[static_cast<size_t>(globalIdx)];
+                    }
+                }
+                
+                n.setOriginalDeltaPitch(noteDelta);
+                n.setDeltaPitch(noteDelta);
+            }
+            
+            // CRITICAL: Recompose F0 from basePitch and deltaPitch (apply UV mask to hide non-voiced regions)
+            PitchCurveProcessor::composeF0InPlace(*project, /*applyUvMask=*/true);
         }
     }
 

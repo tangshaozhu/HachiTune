@@ -254,7 +254,8 @@ namespace PitchCurveProcessor
         for (int i = 0; i < totalFrames; ++i)
             audioData.baseF0[static_cast<size_t>(i)] = midiToFreq(audioData.basePitch[static_cast<size_t>(i)]);
 
-        composeF0InPlace(project, /*applyUvMask=*/false);
+        // CRITICAL: Apply UV mask to hide non-voiced regions in UI
+        composeF0InPlace(project, /*applyUvMask=*/true);
     }
 
     void rebuildBaseFromNotes(Project& project)
