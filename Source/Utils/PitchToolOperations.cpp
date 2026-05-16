@@ -51,8 +51,17 @@ std::vector<float> reduceVariance(const std::vector<float>& deltaPitch,
   std::vector<float> result(deltaPitch.size());
   const size_t n = deltaPitch.size();
   
-  // Boundary region: keep 15% of note length fixed at each end
-  const size_t boundaryWidth = std::max(static_cast<size_t>(1), n / 7);
+  // Boundary width based on SMOOTH_WINDOW (0.04s = ~3.45 frames at 44100Hz/512 hop)
+  // Convert time window to frame count for consistent behavior across different sample rates
+  constexpr double SMOOTH_WINDOW_SEC = 0.04;  // 40ms total window
+  constexpr int HOP_SIZE = 512;
+  constexpr int SAMPLE_RATE = 44100;
+  const int smoothWindowFrames = static_cast<int>(std::round(
+      SMOOTH_WINDOW_SEC * SAMPLE_RATE / HOP_SIZE));  // ≈ 3-4 frames
+  
+  // Use smoothWindowFrames as boundary width (proportional to transition smoothness)
+  const size_t boundaryWidth = std::max(static_cast<size_t>(1), 
+                                        static_cast<size_t>(smoothWindowFrames));
   
   for (size_t i = 0; i < n; ++i) {
     // Calculate distance from nearest boundary (0.0 to 1.0)
