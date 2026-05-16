@@ -212,62 +212,75 @@ std::vector<float> applyAllTransformations(const std::vector<float>& originalDel
   return result;
 }
 
-// 新增：一阶高通滤波平直化算法，模拟Autotune的行为
+// 优化：一阶高通滤波 + 边缘40ms余弦窗混合算法，模拟Autotune的行为
 std::vector<float> highPassFlatten(const std::vector<float>& f0Curve, float cutoffRatio) {
     if (f0Curve.empty()) {
         return f0Curve;
     }
     
+    const size_t n = f0Curve.size();
+    
+    // 边界情况处理
     if (cutoffRatio <= 0.0f) {
         return f0Curve;  // 不滤波，返回原曲线
     }
     
-    if (cutoffRatio >= 1.0f) {
-        // 完全滤波，返回均值
-        const float mean = std::accumulate(f0Curve.begin(), f0Curve.end(), 0.0f) / static_cast<float>(f0Curve.size());
-        return std::vector<float>(f0Curve.size(), mean);
+    // 步骤1：计算原始曲线的均值作为基准
+    const float originalMean = std::accumulate(f0Curve.begin(), f0Curve.end(), 0.0f) / static_cast<float>(n);
+    
+    // 步骤2：将曲线转换为围绕0的偏差值（中心化）
+    std::vector<float> centeredCurve(n);
+    for (size_t i = 0; i < n; ++i) {
+        centeredCurve[i] = f0Curve[i] - originalMean;
     }
     
-    // 计算原始曲线的均值作为基准
-    const float originalMean = std::accumulate(f0Curve.begin(), f0Curve.end(), 0.0f) / static_cast<float>(f0Curve.size());
+    // 步骤3：对中心化的曲线应用一阶高通滤波
+    std::vector<float> filteredCentered(n);
+    filteredCentered[0] = centeredCurve[0];  // 保留起点
     
-    // 将曲线转换为围绕0的偏差值
-    std::vector<float> centeredCurve = f0Curve;
-    for (auto& val : centeredCurve) {
-        val -= originalMean;
-    }
-    
-    // 对中心化的曲线应用一阶高通滤波
-    std::vector<float> result = centeredCurve;
-    const size_t n = centeredCurve.size();
-    
-    // 使用一阶高通滤波器，保留原始起点值
     // 高通滤波器形式: y[n] = alpha * (y[n-1] + x[n] - x[n-1])
     const float alpha = 1.0f - cutoffRatio;
     
-    // 从第二点开始应用滤波器
     for (size_t i = 1; i < n; ++i) {
-        // 应用一阶高通滤波
-        result[i] = alpha * (result[i-1] + centeredCurve[i] - centeredCurve[i-1]);
+        filteredCentered[i] = alpha * (filteredCentered[i-1] + centeredCurve[i] - centeredCurve[i-1]);
     }
     
-    // 将基准均值加回去
-    for (auto& val : result) {
-        val += originalMean;
+    // 步骤4：将基准均值加回去，得到完全滤波后的曲线
+    std::vector<float> fullyFiltered(n);
+    for (size_t i = 0; i < n; ++i) {
+        fullyFiltered[i] = filteredCentered[i] + originalMean;
     }
     
-    // 如果需要，可以对结果进行后处理以改善右端点对齐
-    if (cutoffRatio > 0.5f) {
-        // 对最后几个点进行轻微平滑以避免右端点跳跃
-        const size_t smoothLength = std::min(static_cast<size_t>(n / 10), static_cast<size_t>(10));
-        if (smoothLength > 1 && n > smoothLength * 2) {
-            // 使用线性插值平滑最后几个点
-            const float target = std::accumulate(result.end() - smoothLength, result.end(), 0.0f) / static_cast<float>(smoothLength);
-            for (size_t i = n - smoothLength; i < n; ++i) {
-                const float t = static_cast<float>(i - (n - smoothLength)) / static_cast<float>(smoothLength);
-                result[i] = result[i] * (1.0f - t) + target * t;
-            }
+    // 步骤5：计算40ms窗口对应的帧数
+    constexpr double SMOOTH_WINDOW_SEC = 0.04;  // 40ms
+    constexpr int HOP_SIZE = 512;
+    constexpr int SAMPLE_RATE = 44100;
+    const int smoothWindowFrames = std::max(1, static_cast<int>(std::round(
+        SMOOTH_WINDOW_SEC * SAMPLE_RATE / HOP_SIZE)));  // ≈ 3-4 frames
+    
+    // 步骤6：在边缘区域使用余弦窗进行加权混合
+    std::vector<float> result(n);
+    
+    for (size_t i = 0; i < n; ++i) {
+        // 计算到最近边界的距离（帧数）
+        const int distToLeft = static_cast<int>(i);
+        const int distToRight = static_cast<int>(n - 1 - i);
+        const int distToNearestBoundary = std::min(distToLeft, distToRight);
+        
+        float blendWeight = 1.0f;  // 默认完全使用滤波后的曲线
+        
+        // 如果在边缘40ms窗口内，使用余弦窗混合
+        if (distToNearestBoundary < smoothWindowFrames) {
+            // 归一化距离：0（边界）-> 1（窗口边缘）
+            const float normalizedDist = static_cast<float>(distToNearestBoundary) / static_cast<float>(smoothWindowFrames);
+            
+            // 余弦权重：边界处=0（完全原曲线），窗口边缘处=1（完全滤波曲线）
+            blendWeight = 0.5f * (1.0f - std::cos(normalizedDist * 3.14159265f));
         }
+        
+        // 加权混合：原曲线和平滑曲线
+        // cutoffRatio >= 1.0 时也应用此逻辑
+        result[i] = f0Curve[i] * (1.0f - blendWeight) + fullyFiltered[i] * blendWeight;
     }
     
     return result;
