@@ -1543,6 +1543,63 @@ void PianoRollComponent::drawNotes(juce::Graphics &g, NoteRenderPass pass)
       }
     }
   }
+
+  // Draw boundary merge highlight when near note boundary in split mode
+  if (drawOverlays && editMode == EditMode::Split && splitHandler_ &&
+      splitHandler_->isNearBoundary())
+  {
+    float boundaryX = splitHandler_->getBoundaryHighlightX();
+    Note* leftNote = splitHandler_->getBoundaryLeftNote();
+    Note* rightNote = splitHandler_->getBoundaryRightNote();
+    
+    if (boundaryX >= 0 && leftNote && rightNote)
+    {
+      // Calculate the combined note area
+      float leftStartX = framesToSeconds(leftNote->getStartFrame()) * pixelsPerSecond;
+      float rightEndX = framesToSeconds(rightNote->getEndFrame()) * pixelsPerSecond;
+      
+      float leftY = midiToY(leftNote->getAdjustedMidiNote());
+      float rightY = midiToY(rightNote->getAdjustedMidiNote());
+      float topY = std::min(leftY, rightY);
+      float bottomY = std::max(leftY, rightY) + pixelsPerSemitone;
+      
+      // Draw highlighted boundary with thin vertical line (reduced from wide highlight bar)
+      const float highlightWidth = 8.0f;
+      const float halfWidth = highlightWidth / 2.0f;
+      
+      // Main thin line (brighter)
+      g.setColour(APP_COLOR_PRIMARY.withAlpha(1.0f));
+      g.drawLine(boundaryX, topY, boundaryX, bottomY, 1.5f);
+      
+      // Subtle glow effect (brighter)
+      g.setColour(APP_COLOR_PRIMARY.withAlpha(0.5f));
+      g.drawLine(boundaryX - 1, topY, boundaryX - 1, bottomY, 1.0f);
+      g.drawLine(boundaryX + 1, topY, boundaryX + 1, bottomY, 1.0f);
+      
+      // Draw merge icon (two arrows pointing at each other)
+      // Draw merge icon (two arrows pointing at each other)
+      const float arrowSize = 6.0f;
+      const float centerY = (topY + bottomY) / 2.0f;
+      
+      // Left arrow
+      juce::Path leftArrow;
+      leftArrow.startNewSubPath(boundaryX - halfWidth - 1, centerY);
+      leftArrow.lineTo(boundaryX - halfWidth - 1 - arrowSize, centerY - arrowSize / 2);
+      leftArrow.lineTo(boundaryX - halfWidth - 1 - arrowSize, centerY + arrowSize / 2);
+      leftArrow.closeSubPath();
+      
+      // Right arrow
+      juce::Path rightArrow;
+      rightArrow.startNewSubPath(boundaryX + halfWidth + 1, centerY);
+      rightArrow.lineTo(boundaryX + halfWidth + 1 + arrowSize, centerY - arrowSize / 2);
+      rightArrow.lineTo(boundaryX + halfWidth + 1 + arrowSize, centerY + arrowSize / 2);
+      rightArrow.closeSubPath();
+      
+      g.setColour(juce::Colours::white);
+      g.fillPath(leftArrow);
+      g.fillPath(rightArrow);
+    }
+  }
 }
 
 #if HACHITUNE_ENABLE_STRETCH

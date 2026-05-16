@@ -456,7 +456,9 @@ public:
                         int validCount = 0;
                         
                         for (int i = startFrame; i < endFrame && i < static_cast<int>(audioData.f0.size()); ++i) {
-                            if (audioData.f0[static_cast<size_t>(i)] > 0.0f) {
+                            // Only count voiced frames with valid F0 (skip non-voiced regions where F0 may be 0 or interpolated)
+                            if (i < static_cast<int>(audioData.voicedMask.size()) && 
+                                audioData.voicedMask[i] && audioData.f0[static_cast<size_t>(i)] > 0.0f) {
                                 sumF0Midi += freqToMidi(audioData.f0[static_cast<size_t>(i)]);
                                 validCount++;
                             }
@@ -483,7 +485,9 @@ public:
                         int validCount = 0;
                         
                         for (int i = startFrame; i < endFrame && i < static_cast<int>(audioData.f0.size()); ++i) {
-                            if (audioData.f0[static_cast<size_t>(i)] > 0.0f) {
+                            // Only count voiced frames with valid F0 (skip non-voiced regions where F0 may be 0 or interpolated)
+                            if (i < static_cast<int>(audioData.voicedMask.size()) && 
+                                audioData.voicedMask[i] && audioData.f0[static_cast<size_t>(i)] > 0.0f) {
                                 sumF0Midi += freqToMidi(audioData.f0[static_cast<size_t>(i)]);
                                 validCount++;
                             }
@@ -582,5 +586,197 @@ private:
     Note originalNote;
     Note firstNote;
     Note secondNote;
+    std::function<void()> onChanged;
+};
+
+/**
+ * Action for merging two adjacent notes into one.
+ */
+class NoteMergeAction : public UndoableAction
+{
+public:
+    NoteMergeAction(Project *proj, const Note &leftNote, const Note &rightNote, const Note &mergedNote,
+                    std::function<void()> onChanged = nullptr)
+        : project(proj), leftNoteSnapshot(leftNote), rightNoteSnapshot(rightNote), mergedNoteSnapshot(mergedNote),
+          onChanged(onChanged) {}
+
+    void undo() override
+    {
+        if (!project)
+            return;
+        
+        // CRITICAL: Verify the merged note still exists before removing
+        // After multiple operations, the merged note may have been modified or deleted
+        bool mergedNoteFound = false;
+        for (auto it = project->getNotes().begin(); it != project->getNotes().end(); ++it) {
+            if (it->getStartFrame() == mergedNoteSnapshot.getStartFrame() &&
+                it->getEndFrame() == mergedNoteSnapshot.getEndFrame()) {
+                project->getNotes().erase(it);
+                mergedNoteFound = true;
+                break;
+            }
+        }
+        
+        // Only restore original notes if we successfully removed the merged note
+        if (mergedNoteFound) {
+            project->addNote(leftNoteSnapshot);
+            project->addNote(rightNoteSnapshot);
+        } else {
+            // Merged note not found or already modified - skip undo to avoid corruption
+            DBG("NoteMergeAction::undo() - Merged note not found, skipping undo to prevent data corruption");
+            return;
+        }
+        
+        // CRITICAL: After restoring notes, rebuild basePitch and deltaPitch
+        // Use the same approach as mergeNotes/redo to ensure consistency
+        {
+            auto& audioData = project->getAudioData();
+            const int totalFrames = audioData.getNumFrames();
+            
+            // Step 1: Build note segments for base pitch generation
+            std::vector<BasePitchCurve::NoteSegment> segments;
+            const auto& notes = project->getNotes();
+            segments.reserve(notes.size());
+            for (const auto& n : notes) {
+                if (n.isRest()) continue;
+                
+                BasePitchCurve::NoteSegment seg;
+                seg.startFrame = n.getStartFrame();
+                seg.endFrame = n.getEndFrame();
+                seg.midiNote = n.getMidiNote() + n.getPitchOffset()
+                             - (n.getTiltLeft() + n.getTiltRight()) / 2.0f;
+                segments.push_back(seg);
+            }
+            
+            std::sort(segments.begin(), segments.end(),
+                      [](const auto& a, const auto& b) { return a.startFrame < b.startFrame; });
+            
+            // Step 2: Regenerate basePitch from notes
+            if (!segments.empty()) {
+                audioData.basePitch = BasePitchCurve::generateForNotes(segments, totalFrames);
+            }
+            
+            // Step 3: Recalculate deltaPitch from f0 and new basePitch (same as mergeNotes)
+            audioData.deltaPitch.resize(static_cast<size_t>(totalFrames));
+            for (int i = 0; i < totalFrames; ++i) {
+                const float baseMidi = audioData.basePitch[static_cast<size_t>(i)];
+                const float f0Midi = freqToMidi(audioData.f0[static_cast<size_t>(i)]);
+                audioData.deltaPitch[static_cast<size_t>(i)] = f0Midi - baseMidi;
+            }
+            
+            // Step 4: Update cached baseF0
+            audioData.baseF0.resize(static_cast<size_t>(totalFrames));
+            for (int i = 0; i < totalFrames; ++i) {
+                audioData.baseF0[static_cast<size_t>(i)] = midiToFreq(audioData.basePitch[static_cast<size_t>(i)]);
+            }
+            
+            // Step 5: Sync global deltaPitch back to each note's deltaPitch vectors
+            for (auto& n : project->getNotes()) {
+                if (n.isRest()) continue;
+                
+                const int startFrame = n.getStartFrame();
+                const int endFrame = n.getEndFrame();
+                const int numFrames = endFrame - startFrame;
+                
+                if (numFrames <= 0) continue;
+                
+                std::vector<float> noteDelta(static_cast<size_t>(numFrames));
+                for (int i = 0; i < numFrames; ++i) {
+                    const int globalIdx = startFrame + i;
+                    if (globalIdx >= 0 && globalIdx < totalFrames) {
+                        noteDelta[static_cast<size_t>(i)] = audioData.deltaPitch[static_cast<size_t>(globalIdx)];
+                    }
+                }
+                
+                n.setOriginalDeltaPitch(noteDelta);
+                n.setDeltaPitch(noteDelta);
+            }
+            
+            // CRITICAL: Recompose F0 from basePitch and deltaPitch
+            PitchCurveProcessor::composeF0InPlace(*project, /*applyUvMask=*/false);
+        }
+        
+        if (onChanged)
+            onChanged();
+    }
+
+    void redo() override
+    {
+        if (!project)
+            return;
+        
+        // CRITICAL: Verify both original notes still exist before removing
+        // After multiple operations, the original notes may have been modified or deleted
+        bool leftNoteFound = false;
+        bool rightNoteFound = false;
+        
+        auto& notes = project->getNotes();
+        
+        // Find and remove left note
+        for (auto it = notes.begin(); it != notes.end(); ++it) {
+            if (it->getStartFrame() == leftNoteSnapshot.getStartFrame() &&
+                it->getEndFrame() == leftNoteSnapshot.getEndFrame()) {
+                notes.erase(it);
+                leftNoteFound = true;
+                break;
+            }
+        }
+        
+        // Find and remove right note (need to search again as iterator may be invalidated)
+        for (auto it = notes.begin(); it != notes.end(); ++it) {
+            if (it->getStartFrame() == rightNoteSnapshot.getStartFrame() &&
+                it->getEndFrame() == rightNoteSnapshot.getEndFrame()) {
+                notes.erase(it);
+                rightNoteFound = true;
+                break;
+            }
+        }
+        
+        // Only add merged note if both original notes were successfully removed
+        if (leftNoteFound && rightNoteFound) {
+            project->addNote(mergedNoteSnapshot);
+        } else {
+            // Original notes not found or already modified - skip redo to avoid corruption
+            return;
+        }
+        
+        // CRITICAL: After merging, recalculate midiNote based on average F0
+        {
+            auto& audioData = project->getAudioData();
+            
+            for (auto& n : project->getNotes()) {
+                if (n.getStartFrame() == mergedNoteSnapshot.getStartFrame()) {
+                    const int startFrame = n.getStartFrame();
+                    const int endFrame = n.getEndFrame();
+                    
+                    if (!audioData.f0.empty() && endFrame > startFrame) {
+                        float sumF0Midi = 0.0f;
+                        int validCount = 0;
+                        
+                        for (int i = startFrame; i < endFrame && i < static_cast<int>(audioData.f0.size()); ++i) {
+                            if (audioData.f0[static_cast<size_t>(i)] > 0.0f) {
+                                sumF0Midi += freqToMidi(audioData.f0[static_cast<size_t>(i)]);
+                                validCount++;
+                            }
+                        }
+                        
+                        if (validCount > 0) {
+                            const float avgF0Midi = sumF0Midi / static_cast<float>(validCount);
+                            n.setMidiNote(avgF0Midi);
+                            n.setPitchOffset(0.0f);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    juce::String getName() const override { return "Merge Notes"; }
+
+private:
+    Project *project;
+    Note leftNoteSnapshot;
+    Note rightNoteSnapshot;
+    Note mergedNoteSnapshot;
     std::function<void()> onChanged;
 };

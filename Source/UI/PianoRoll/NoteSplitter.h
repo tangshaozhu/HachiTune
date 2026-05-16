@@ -35,6 +35,19 @@ public:
      */
     bool splitNoteAtX(Note* note, float x);
 
+    /**
+     * Find the boundary between two adjacent notes at the given X coordinate.
+     * Returns the right note if mouse is near the left edge, or left note if near the right edge.
+     * Returns nullptr if not near any boundary.
+     */
+    Note* findNoteBoundaryAt(float x, float y, float& boundaryX);
+
+    /**
+     * Merge two adjacent notes into one.
+     * Returns true if merge was successful.
+     */
+    bool mergeNotes(Note* leftNote, Note* rightNote);
+
     // Callbacks
     std::function<void()> onNoteSplit;
 

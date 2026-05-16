@@ -190,10 +190,10 @@ bool NoteSplitter::splitNoteAtFrame(Note* note, int splitFrame) {
         // Calculate average F0 MIDI value for each note segment and set as midiNote
         // This makes basePitch track the actual F0 without needing pitchOffset
         
-        // For first note (left part) - note is the original pointer, already modified in project
+        // For first note (left part) - use saved snapshot to avoid dangling pointer
         {
-            const int startFrame = note->getStartFrame();
-            const int endFrame = note->getEndFrame();
+            const int startFrame = firstNote.getStartFrame();
+            const int endFrame = firstNote.getEndFrame();
             
             if (!audioData.f0.empty() && endFrame > startFrame) {
                 // Calculate average F0 in MIDI cents for this segment
@@ -201,7 +201,9 @@ bool NoteSplitter::splitNoteAtFrame(Note* note, int splitFrame) {
                 int validCount = 0;
                 
                 for (int i = startFrame; i < endFrame && i < static_cast<int>(audioData.f0.size()); ++i) {
-                    if (audioData.f0[static_cast<size_t>(i)] > 0.0f) {
+                    // Only count voiced frames with valid F0 (skip non-voiced regions where F0 may be 0 or interpolated)
+                    if (i < static_cast<int>(audioData.voicedMask.size()) && 
+                        audioData.voicedMask[i] && audioData.f0[static_cast<size_t>(i)] > 0.0f) {
                         sumF0Midi += freqToMidi(audioData.f0[static_cast<size_t>(i)]);
                         validCount++;
                     }
@@ -210,9 +212,15 @@ bool NoteSplitter::splitNoteAtFrame(Note* note, int splitFrame) {
                 if (validCount > 0) {
                     const float avgF0Midi = sumF0Midi / static_cast<float>(validCount);
                     
-                    // Update the note's midiNote to match average F0
-                    note->setMidiNote(avgF0Midi);
-                    note->setPitchOffset(0.0f);  // Explicitly reset to 0
+                    // Find and update the first note in project using startFrame and endFrame
+                    for (size_t i = 0; i < project->getNotes().size(); ++i) {
+                        auto& n = project->getNotes()[i];
+                        if (n.getStartFrame() == startFrame && n.getEndFrame() == endFrame) {
+                            n.setMidiNote(avgF0Midi);
+                            n.setPitchOffset(0.0f);
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -228,7 +236,9 @@ bool NoteSplitter::splitNoteAtFrame(Note* note, int splitFrame) {
                 int validCount = 0;
                 
                 for (int i = startFrame; i < endFrame && i < static_cast<int>(audioData.f0.size()); ++i) {
-                    if (audioData.f0[static_cast<size_t>(i)] > 0.0f) {
+                    // Only count voiced frames with valid F0 (skip non-voiced regions where F0 may be 0 or interpolated)
+                    if (i < static_cast<int>(audioData.voicedMask.size()) && 
+                        audioData.voicedMask[i] && audioData.f0[static_cast<size_t>(i)] > 0.0f) {
                         sumF0Midi += freqToMidi(audioData.f0[static_cast<size_t>(i)]);
                         validCount++;
                     }
@@ -237,11 +247,12 @@ bool NoteSplitter::splitNoteAtFrame(Note* note, int splitFrame) {
                 if (validCount > 0) {
                     const float avgF0Midi = sumF0Midi / static_cast<float>(validCount);
                     
-                    // Find and update the second note in project
-                    for (auto& n : project->getNotes()) {
-                        if (n.getStartFrame() == startFrame) {
+                    // Find and update the second note in project using index-based access
+                    for (size_t i = 0; i < project->getNotes().size(); ++i) {
+                        auto& n = project->getNotes()[i];
+                        if (n.getStartFrame() == startFrame && n.getEndFrame() == endFrame) {
                             n.setMidiNote(avgF0Midi);
-                            n.setPitchOffset(0.0f);  // Explicitly reset to 0
+                            n.setPitchOffset(0.0f);
                             break;
                         }
                     }
@@ -343,4 +354,245 @@ bool NoteSplitter::splitNoteAtX(Note* note, float x) {
     int frame = static_cast<int>(time * SAMPLE_RATE / HOP_SIZE);
 
     return splitNoteAtFrame(note, frame);
+}
+
+Note* NoteSplitter::findNoteBoundaryAt(float x, float y, float& boundaryX) {
+    if (!project || !coordMapper)
+        return nullptr;
+
+    juce::ignoreUnused(y);  // Y coordinate is no longer used for boundary detection
+    
+    float pixelsPerSecond = coordMapper->getPixelsPerSecond();
+    
+    // Get all notes and sort by start frame
+    auto& notes = project->getNotes();
+    std::vector<Note*> sortedNotes;
+    for (auto& n : notes) {
+        if (!n.isRest()) {
+            sortedNotes.push_back(&n);
+        }
+    }
+    std::sort(sortedNotes.begin(), sortedNotes.end(),
+              [](const Note* a, const Note* b) {
+                  return a->getStartFrame() < b->getStartFrame();
+              });
+    
+    // Check all adjacent note pairs for boundaries near the mouse X position
+    for (size_t i = 0; i < sortedNotes.size() - 1; ++i) {
+        Note* leftNote = sortedNotes[i];
+        Note* rightNote = sortedNotes[i + 1];
+        
+        // Check if notes are adjacent (within 1 frame tolerance)
+        if (std::abs(leftNote->getEndFrame() - rightNote->getStartFrame()) <= 1) {
+            float leftEndX = framesToSeconds(leftNote->getEndFrame()) * pixelsPerSecond;
+            float rightStartX = framesToSeconds(rightNote->getStartFrame()) * pixelsPerSecond;
+            
+            // Check if mouse is within 8 pixels of the boundary
+            float distToLeft = std::abs(x - leftEndX);
+            float distToRight = std::abs(x - rightStartX);
+            
+            if (distToLeft < 8.0f || distToRight < 8.0f) {
+                boundaryX = (leftEndX + rightStartX) / 2.0f;
+                return leftNote;  // Return the left note for merging
+            }
+        }
+    }
+    
+    return nullptr;
+}
+
+bool NoteSplitter::mergeNotes(Note* leftNote, Note* rightNote) {
+    if (!leftNote || !rightNote || !project)
+        return false;
+    
+    // Verify notes are adjacent
+    if (leftNote->getEndFrame() != rightNote->getStartFrame())
+        return false;
+    
+    // Store original notes for undo
+    Note leftNoteSnapshot = *leftNote;
+    Note rightNoteSnapshot = *rightNote;
+    
+    // Create merged note
+    Note mergedNote;
+    mergedNote.setStartFrame(leftNote->getStartFrame());
+    mergedNote.setEndFrame(rightNote->getEndFrame());
+    mergedNote.setSrcStartFrame(leftNote->getSrcStartFrame());
+    mergedNote.setSrcEndFrame(rightNote->getSrcEndFrame());
+    mergedNote.setMidiNote(leftNote->getMidiNote());  // Will be recalculated based on average F0
+    mergedNote.setLyric(leftNote->getLyric());
+    mergedNote.setPitchOffset(0.0f);
+    
+    // Merge clip waveforms if available
+    if (leftNote->hasClipWaveform() && rightNote->hasClipWaveform()) {
+        const auto& leftClip = leftNote->getClipWaveform();
+        const auto& rightClip = rightNote->getClipWaveform();
+        std::vector<float> mergedClip;
+        mergedClip.reserve(leftClip.size() + rightClip.size());
+        mergedClip.insert(mergedClip.end(), leftClip.begin(), leftClip.end());
+        mergedClip.insert(mergedClip.end(), rightClip.begin(), rightClip.end());
+        mergedNote.setClipWaveform(std::move(mergedClip));
+    }
+    
+    // Merge source clip waveforms if available
+    if (leftNote->hasSrcClipWaveform() && rightNote->hasSrcClipWaveform()) {
+        const auto& leftSrcClip = leftNote->getSrcClipWaveform();
+        const auto& rightSrcClip = rightNote->getSrcClipWaveform();
+        std::vector<float> mergedSrcClip;
+        mergedSrcClip.reserve(leftSrcClip.size() + rightSrcClip.size());
+        mergedSrcClip.insert(mergedSrcClip.end(), leftSrcClip.begin(), leftSrcClip.end());
+        mergedSrcClip.insert(mergedSrcClip.end(), rightSrcClip.begin(), rightSrcClip.end());
+        mergedNote.setSrcClipWaveform(std::move(mergedSrcClip));
+    }
+    
+    // Merge clip mel if available
+    if (leftNote->hasClipMel() && rightNote->hasClipMel()) {
+        const auto& leftMel = leftNote->getClipMel();
+        const auto& rightMel = rightNote->getClipMel();
+        std::vector<std::vector<float>> mergedMel;
+        mergedMel.reserve(leftMel.size() + rightMel.size());
+        mergedMel.insert(mergedMel.end(), leftMel.begin(), leftMel.end());
+        mergedMel.insert(mergedMel.end(), rightMel.begin(), rightMel.end());
+        mergedNote.setClipMel(std::move(mergedMel));
+    }
+    
+    // Merge originalDeltaPitch if available
+    if (leftNote->hasOriginalDeltaPitch() && rightNote->hasOriginalDeltaPitch()) {
+        const auto& leftDelta = leftNote->getOriginalDeltaPitch();
+        const auto& rightDelta = rightNote->getOriginalDeltaPitch();
+        std::vector<float> mergedDelta;
+        mergedDelta.reserve(leftDelta.size() + rightDelta.size());
+        mergedDelta.insert(mergedDelta.end(), leftDelta.begin(), leftDelta.end());
+        mergedDelta.insert(mergedDelta.end(), rightDelta.begin(), rightDelta.end());
+        mergedNote.setOriginalDeltaPitch(std::move(mergedDelta));
+    }
+    
+    // CRITICAL: Save start frames BEFORE removing notes to avoid issues with pointer invalidation
+    // after vector reallocation during removeNoteByStartFrame
+    const int leftStartFrame = leftNote->getStartFrame();
+    const int rightStartFrame = rightNote->getStartFrame();
+    
+    // Remove both notes from project
+    project->removeNoteByStartFrame(leftStartFrame);
+    project->removeNoteByStartFrame(rightStartFrame);
+    
+    // Add merged note
+    project->addNote(mergedNote);
+    
+    // CRITICAL: After merging, recalculate midiNote based on average F0
+    {
+        auto& audioData = project->getAudioData();
+        
+        // Find merged note using startFrame
+        for (auto& n : project->getNotes()) {
+            if (n.getStartFrame() == mergedNote.getStartFrame()) {
+                const int startFrame = n.getStartFrame();
+                const int endFrame = n.getEndFrame();
+                
+                if (!audioData.f0.empty() && endFrame > startFrame) {
+                    float sumF0Midi = 0.0f;
+                    int validCount = 0;
+                    
+                    for (int i = startFrame; i < endFrame && i < static_cast<int>(audioData.f0.size()); ++i) {
+                        // Only count voiced frames with valid F0 (skip non-voiced regions where F0 may be 0 or interpolated)
+                        if (i < static_cast<int>(audioData.voicedMask.size()) && 
+                            audioData.voicedMask[i] && audioData.f0[static_cast<size_t>(i)] > 0.0f) {
+                            sumF0Midi += freqToMidi(audioData.f0[static_cast<size_t>(i)]);
+                            validCount++;
+                        }
+                    }
+                    
+                    if (validCount > 0) {
+                        const float avgF0Midi = sumF0Midi / static_cast<float>(validCount);
+                        n.setMidiNote(avgF0Midi);
+                        n.setPitchOffset(0.0f);
+                    }
+                }
+                break;
+            }
+        }
+    }
+    
+    // CRITICAL: After merging, rebuild basePitch and deltaPitch
+    {
+        auto& audioData = project->getAudioData();
+        const int totalFrames = audioData.getNumFrames();
+        
+        // Step 1: Build note segments for base pitch generation
+        std::vector<BasePitchCurve::NoteSegment> segments;
+        const auto& notes = project->getNotes();
+        segments.reserve(notes.size());
+        for (const auto& n : notes) {
+            if (n.isRest()) continue;
+            
+            BasePitchCurve::NoteSegment seg;
+            seg.startFrame = n.getStartFrame();
+            seg.endFrame = n.getEndFrame();
+            seg.midiNote = n.getMidiNote() + n.getPitchOffset()
+                         - (n.getTiltLeft() + n.getTiltRight()) / 2.0f;
+            segments.push_back(seg);
+        }
+        
+        std::sort(segments.begin(), segments.end(),
+                  [](const auto& a, const auto& b) { return a.startFrame < b.startFrame; });
+        
+        // Step 2: Regenerate basePitch from notes
+        if (!segments.empty()) {
+            audioData.basePitch = BasePitchCurve::generateForNotes(segments, totalFrames);
+        }
+        
+        // Step 3: Recalculate deltaPitch from f0 and new basePitch
+        audioData.deltaPitch.resize(static_cast<size_t>(totalFrames));
+        for (int i = 0; i < totalFrames; ++i) {
+            const float baseMidi = audioData.basePitch[static_cast<size_t>(i)];
+            const float f0Midi = freqToMidi(audioData.f0[static_cast<size_t>(i)]);
+            audioData.deltaPitch[static_cast<size_t>(i)] = f0Midi - baseMidi;
+        }
+        
+        // Step 4: Update cached baseF0
+        audioData.baseF0.resize(static_cast<size_t>(totalFrames));
+        for (int i = 0; i < totalFrames; ++i) {
+            audioData.baseF0[static_cast<size_t>(i)] = midiToFreq(audioData.basePitch[static_cast<size_t>(i)]);
+        }
+        
+        // Step 5: Sync global deltaPitch back to each note's deltaPitch vectors
+        for (auto& n : project->getNotes()) {
+            if (n.isRest()) continue;
+            
+            const int startFrame = n.getStartFrame();
+            const int endFrame = n.getEndFrame();
+            const int numFrames = endFrame - startFrame;
+            
+            if (numFrames <= 0) continue;
+            
+            std::vector<float> noteDelta(static_cast<size_t>(numFrames));
+            for (int i = 0; i < numFrames; ++i) {
+                const int globalIdx = startFrame + i;
+                if (globalIdx >= 0 && globalIdx < totalFrames) {
+                    noteDelta[static_cast<size_t>(i)] = audioData.deltaPitch[static_cast<size_t>(globalIdx)];
+                }
+            }
+            
+            n.setOriginalDeltaPitch(noteDelta);
+            n.setDeltaPitch(noteDelta);
+        }
+        
+        // CRITICAL: Recompose F0 from basePitch and deltaPitch
+        PitchCurveProcessor::composeF0InPlace(*project, /*applyUvMask=*/false);
+    }
+    
+    // Add to undo manager
+    if (undoManager) {
+        auto action = std::make_unique<NoteMergeAction>(
+            project, leftNoteSnapshot, rightNoteSnapshot, mergedNote,
+            [this]() {
+                // Callback for UI refresh
+            });
+        undoManager->addAction(std::move(action));
+    }
+    
+    if (onNoteSplit)
+        onNoteSplit();
+    
+    return true;
 }
