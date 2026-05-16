@@ -182,20 +182,7 @@ std::vector<float> applyAllTransformations(const std::vector<float>& originalDel
 
   // 3. Apply high-pass flattening if needed
   if (std::abs(highPassCutoff) > 0.001f) {
-    // Convert delta pitch back to F0 for processing
-    std::vector<float> f0Curve(result.size());
-    const float basePitch = 0.0f;  // We're working with delta from base
-    for (size_t i = 0; i < result.size(); ++i) {
-        f0Curve[i] = std::pow(2.0f, result[i] / 12.0f) * midiToFreq(basePitch);
-    }
-    
-    // Apply high-pass filter
-    auto filteredF0 = highPassFlatten(f0Curve, highPassCutoff);
-    
-    // Convert back to delta pitch
-    for (size_t i = 0; i < result.size(); ++i) {
-        result[i] = 12.0f * std::log2(std::max(filteredF0[i], 1e-6f) / midiToFreq(basePitch));
-    }
+    result = highPassFlatten(result, highPassCutoff);
   }
 
   // 4. Apply boundary smoothing AFTER variance scaling and high-pass filtering
@@ -213,52 +200,36 @@ std::vector<float> applyAllTransformations(const std::vector<float>& originalDel
 }
 
 // 优化：一阶高通滤波 + 边缘40ms余弦窗混合算法，模拟Autotune的行为
-std::vector<float> highPassFlatten(const std::vector<float>& f0Curve, float cutoffRatio) {
-    if (f0Curve.empty()) {
-        return f0Curve;
+std::vector<float> highPassFlatten(const std::vector<float>& deltapitch, float cutoffRatio) {
+    if (deltapitch.empty()) {
+        return deltapitch;
     }
     
-    const size_t n = f0Curve.size();
+    const size_t n = deltapitch.size();
     
     // 边界情况处理
     if (cutoffRatio <= 0.0f) {
-        return f0Curve;  // 不滤波，返回原曲线
+        return deltapitch;  // 不滤波，返回原曲线
     }
     
-    // 步骤1：计算原始曲线的均值作为基准
-    const float originalMean = std::accumulate(f0Curve.begin(), f0Curve.end(), 0.0f) / static_cast<float>(n);
-    
-    // 步骤2：将曲线转换为围绕0的偏差值（中心化）
-    std::vector<float> centeredCurve(n);
-    for (size_t i = 0; i < n; ++i) {
-        centeredCurve[i] = f0Curve[i] - originalMean;
-    }
-    
-    // 步骤3：对中心化的曲线应用一阶高通滤波
-    std::vector<float> filteredCentered(n);
-    filteredCentered[0] = centeredCurve[0];  // 保留起点
+    // 步骤1：对中心化的曲线应用一阶高通滤波
+    std::vector<float> filtered(n);
+    filtered[0] = deltapitch[0];  // 保留起点
     
     // 高通滤波器形式: y[n] = alpha * (y[n-1] + x[n] - x[n-1])
     const float alpha = 1.0f - cutoffRatio;
     
     for (size_t i = 1; i < n; ++i) {
-        filteredCentered[i] = alpha * (filteredCentered[i-1] + centeredCurve[i] - centeredCurve[i-1]);
+        filtered[i] = alpha * (filtered[i-1] + deltapitch[i] - deltapitch[i-1]);
     }
     
-    // 步骤4：将基准均值加回去，得到完全滤波后的曲线
-    std::vector<float> fullyFiltered(n);
-    for (size_t i = 0; i < n; ++i) {
-        fullyFiltered[i] = filteredCentered[i] + originalMean;
-    }
-    
-    // 步骤5：计算40ms窗口对应的帧数
+    // 步骤2：在边缘区域使用余弦窗进行加权混合
     constexpr double SMOOTH_WINDOW_SEC = 0.04;  // 40ms
     constexpr int HOP_SIZE = 512;
     constexpr int SAMPLE_RATE = 44100;
-    const int smoothWindowFrames = std::max(1, static_cast<int>(std::round(
+    const int smoothWindowFrames = std::max(2, static_cast<int>(std::round(
         SMOOTH_WINDOW_SEC * SAMPLE_RATE / HOP_SIZE)));  // ≈ 3-4 frames
     
-    // 步骤6：在边缘区域使用余弦窗进行加权混合
     std::vector<float> result(n);
     
     for (size_t i = 0; i < n; ++i) {
@@ -280,7 +251,7 @@ std::vector<float> highPassFlatten(const std::vector<float>& f0Curve, float cuto
         
         // 加权混合：原曲线和平滑曲线
         // cutoffRatio >= 1.0 时也应用此逻辑
-        result[i] = f0Curve[i] * (1.0f - blendWeight) + fullyFiltered[i] * blendWeight;
+        result[i] = deltapitch[i] * (1.0f - blendWeight) + filtered[i] * blendWeight;
     }
     
     return result;
