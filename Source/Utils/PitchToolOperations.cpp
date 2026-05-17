@@ -212,18 +212,58 @@ std::vector<float> highPassFlatten(const std::vector<float>& deltapitch, float c
         return deltapitch;  // 不滤波，返回原曲线
     }
     
-    // 步骤1：对中心化的曲线应用一阶高通滤波
+    // CRITICAL: Find the first and last valid (voiced) frames to limit filtering range
+    // This prevents non-voiced interpolated regions from affecting the filter
+    int firstValidFrame = 0;
+    int lastValidFrame = static_cast<int>(n - 1);
+    
+    // Find first non-zero frame (assumes non-voiced regions have deltaPitch ≈ 0)
+    for (size_t i = 0; i < n; ++i) {
+        if (std::abs(deltapitch[i]) > 1e-6f) {
+            firstValidFrame = static_cast<int>(i);
+            break;
+        }
+    }
+    
+    // Find last non-zero frame
+    for (int i = static_cast<int>(n - 1); i >= 0; --i) {
+        if (std::abs(deltapitch[static_cast<size_t>(i)]) > 1e-6f) {
+            lastValidFrame = i;
+            break;
+        }
+    }
+    
+    // If no valid frames found, return original
+    if (firstValidFrame > lastValidFrame) {
+        return deltapitch;
+    }
+    
+    const int validLength = lastValidFrame - firstValidFrame + 1;
+    
+    // 步骤1：对有效区域应用一阶高通滤波
     std::vector<float> filtered(n);
-    filtered[0] = deltapitch[0];  // 保留起点
+    
+    // Copy non-valid regions as-is
+    for (int i = 0; i < firstValidFrame; ++i) {
+        filtered[static_cast<size_t>(i)] = deltapitch[static_cast<size_t>(i)];
+    }
+    for (int i = lastValidFrame + 1; i < static_cast<int>(n); ++i) {
+        filtered[static_cast<size_t>(i)] = deltapitch[static_cast<size_t>(i)];
+    }
+    
+    // Initialize filter at first valid frame
+    filtered[static_cast<size_t>(firstValidFrame)] = deltapitch[static_cast<size_t>(firstValidFrame)];
     
     // 高通滤波器形式: y[n] = alpha * (y[n-1] + x[n] - x[n-1])
     const float alpha = 1.0f - cutoffRatio;
     
-    for (size_t i = 1; i < n; ++i) {
-        filtered[i] = alpha * (filtered[i-1] + deltapitch[i] - deltapitch[i-1]);
+    for (int i = firstValidFrame + 1; i <= lastValidFrame; ++i) {
+        filtered[static_cast<size_t>(i)] = alpha * (filtered[static_cast<size_t>(i-1)] + 
+                                                     deltapitch[static_cast<size_t>(i)] - 
+                                                     deltapitch[static_cast<size_t>(i-1)]);
     }
     
-    // 步骤2：在边缘区域使用余弦窗进行加权混合
+    // 步骤2：在有效区域的边缘使用余弦窗进行加权混合
     constexpr double SMOOTH_WINDOW_SEC = 0.04;  // 40ms
     constexpr int HOP_SIZE = 512;
     constexpr int SAMPLE_RATE = 44100;
@@ -232,10 +272,19 @@ std::vector<float> highPassFlatten(const std::vector<float>& deltapitch, float c
     
     std::vector<float> result(n);
     
-    for (size_t i = 0; i < n; ++i) {
-        // 计算到最近边界的距离（帧数）
-        const int distToLeft = static_cast<int>(i);
-        const int distToRight = static_cast<int>(n - 1 - i);
+    // Copy non-valid regions as-is
+    for (int i = 0; i < firstValidFrame; ++i) {
+        result[static_cast<size_t>(i)] = deltapitch[static_cast<size_t>(i)];
+    }
+    for (int i = lastValidFrame + 1; i < static_cast<int>(n); ++i) {
+        result[static_cast<size_t>(i)] = deltapitch[static_cast<size_t>(i)];
+    }
+    
+    // Apply cosine window blending within valid region
+    for (int i = firstValidFrame; i <= lastValidFrame; ++i) {
+        // 计算到有效区域边界的距离（帧数）
+        const int distToLeft = i - firstValidFrame;
+        const int distToRight = lastValidFrame - i;
         const int distToNearestBoundary = std::min(distToLeft, distToRight);
         
         float blendWeight = 1.0f;  // 默认完全使用滤波后的曲线
@@ -250,8 +299,8 @@ std::vector<float> highPassFlatten(const std::vector<float>& deltapitch, float c
         }
         
         // 加权混合：原曲线和平滑曲线
-        // cutoffRatio >= 1.0 时也应用此逻辑
-        result[i] = deltapitch[i] * (1.0f - blendWeight) + filtered[i] * blendWeight;
+        result[static_cast<size_t>(i)] = deltapitch[static_cast<size_t>(i)] * (1.0f - blendWeight) + 
+                                         filtered[static_cast<size_t>(i)] * blendWeight;
     }
     
     return result;
