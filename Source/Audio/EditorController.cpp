@@ -1040,6 +1040,102 @@ void EditorController::segmentIntoNotes(Project &targetProject,
       juce::MessageManager::callAsync(onStreamingUpdate);
     }
 
+    // ============================================================
+    // Phase 1: Strict boundary trimming based on voicedMask
+    // Ensure each note starts/ends in voiced regions, and split notes
+    // that contain unvoiced gaps in the middle.
+    // ============================================================
+    if (!notes.empty() && !audioData.voicedMask.empty())
+    {
+      std::vector<Note> trimmedNotes;
+      trimmedNotes.reserve(notes.size() * 2); // Reserve extra space for potential splits
+      
+      for (const auto& note : notes)
+      {
+        int start = note.getStartFrame();
+        int end = note.getEndFrame();
+        
+        if (end <= start) continue;
+        
+        // 1.1 Find first voiced frame as new start
+        int newStart = -1;
+        for (int i = start; i < end; ++i)
+        {
+          if (i < static_cast<int>(audioData.voicedMask.size()) && 
+              audioData.voicedMask[static_cast<size_t>(i)])
+          {
+            newStart = i;
+            break;
+          }
+        }
+        
+        if (newStart < 0) continue; // No voiced frames, skip this note
+        
+        // 1.2 Find last voiced frame as new end
+        int newEnd = -1;
+        for (int i = end - 1; i >= newStart; --i)
+        {
+          if (i < static_cast<int>(audioData.voicedMask.size()) && 
+              audioData.voicedMask[static_cast<size_t>(i)])
+          {
+            newEnd = i + 1;
+            break;
+          }
+        }
+        
+        if (newEnd <= newStart) continue;
+        
+        // 1.3 Check for unvoiced gaps in the middle (need to split)
+        std::vector<std::pair<int, int>> voicedSegments;
+        int segStart = newStart;
+        
+        for (int i = newStart; i < newEnd; ++i)
+        {
+          bool isVoiced = (i < static_cast<int>(audioData.voicedMask.size()) && 
+                          audioData.voicedMask[static_cast<size_t>(i)]);
+          
+          if (!isVoiced && i > segStart)
+          {
+            // Found unvoiced gap, save current voiced segment
+            if (i - segStart >= 3) // Minimum 3 frames
+            {
+              voicedSegments.emplace_back(segStart, i);
+            }
+            segStart = i + 1;
+          }
+          else if (isVoiced && segStart < 0)
+          {
+            segStart = i;
+          }
+        }
+        
+        // Add the last segment
+        if (segStart >= 0 && newEnd - segStart >= 3)
+        {
+          voicedSegments.emplace_back(segStart, newEnd);
+        }
+        
+        // Create notes from voiced segments
+        for (const auto& [segStart, segEnd] : voicedSegments)
+        {
+          Note newNote(segStart, segEnd, note.getMidiNote());
+          std::vector<float> f0Values(audioData.f0.begin() + segStart,
+                                      audioData.f0.begin() + segEnd);
+          newNote.setF0Values(std::move(f0Values));
+          trimmedNotes.push_back(std::move(newNote));
+        }
+      }
+      
+      // Replace original notes with trimmed/split notes
+      notes = std::move(trimmedNotes);
+      
+      // Sort by start frame
+      std::sort(notes.begin(), notes.end(),
+                [](const Note& a, const Note& b) {
+                  return a.getStartFrame() < b.getStartFrame();
+                });
+    }
+
     // VAD + GAME rest-guided boundary refinement:
     // expand note heads/tails into energetic consonant regions so note lengths
     // better cover pre/post-consonants.
@@ -1170,7 +1266,7 @@ void EditorController::segmentIntoNotes(Project &targetProject,
       }
     }
 
-    juce::Thread::sleep(100);
+    // juce::Thread::sleep(100); // what the hell is this?
 
     if (!audioData.f0.empty())
       PitchCurveProcessor::rebuildCurvesFromSource(targetProject, audioData.f0);
