@@ -245,18 +245,6 @@ juce::var ProjectSerializer::noteToJson(const Note& note) {
     obj->setProperty("tiltLeft", note.getTiltLeft());
     obj->setProperty("tiltRight", note.getTiltRight());
     obj->setProperty("varianceScale", note.getVarianceScale());
-    obj->setProperty("smoothLeftFrames", note.getSmoothLeftFrames());
-    obj->setProperty("smoothRightFrames", note.getSmoothRightFrames());
-
-    // Per-note original delta pitch (pristine curve from analysis)
-    if (note.hasOriginalDeltaPitch())
-        obj->setProperty("originalDeltaPitch", floatArrayToString(note.getOriginalDeltaPitch(), 4));
-
-    // Per-note delta scale/offset
-    if (std::abs(note.getDeltaScale() - 1.0f) > 0.0001f)
-        obj->setProperty("deltaScale", note.getDeltaScale());
-    if (std::abs(note.getDeltaOffset()) > 0.0001f)
-        obj->setProperty("deltaOffset", note.getDeltaOffset());
 
     return juce::var(obj);
 }
@@ -265,14 +253,11 @@ bool ProjectSerializer::noteFromJson(Note& note, const juce::var& json) {
     if (!json.isObject())
         return false;
 
-    const int startFrame = json.getProperty("startFrame", 0);
-    const int endFrame = json.getProperty("endFrame", 0);
-    note.setStartFrame(startFrame);
-    note.setEndFrame(endFrame);
-    // Backward compat: if srcStartFrame/srcEndFrame not in file, default to startFrame/endFrame
-    note.setSrcStartFrame(static_cast<int>(json.getProperty("srcStartFrame", startFrame)));
-    note.setSrcEndFrame(static_cast<int>(json.getProperty("srcEndFrame", endFrame)));
-    note.setMidiNote(static_cast<float>(json.getProperty("midiNote", 60.0)));
+    note.setStartFrame(json.getProperty("startFrame", 0));
+    note.setEndFrame(json.getProperty("endFrame", 0));
+    note.setSrcStartFrame(json.getProperty("srcStartFrame", 0));
+    note.setSrcEndFrame(json.getProperty("srcEndFrame", 0));
+    note.setMidiNote(json.getProperty("midiNote", 0));
     note.setPitchOffset(static_cast<float>(json.getProperty("pitchOffset", 0.0)));
     note.setVolumeDb(static_cast<float>(json.getProperty("volumeDb", 0.0)));
     note.setRest(json.getProperty("rest", false));
@@ -281,35 +266,21 @@ bool ProjectSerializer::noteFromJson(Note& note, const juce::var& json) {
     auto vibratoVar = json.getProperty("vibrato", juce::var());
     if (vibratoVar.isObject()) {
         note.setVibratoEnabled(vibratoVar.getProperty("enabled", false));
-        note.setVibratoRateHz(static_cast<float>(vibratoVar.getProperty("rateHz", 5.0)));
+        note.setVibratoRateHz(static_cast<float>(vibratoVar.getProperty("rateHz", 0.0)));
         note.setVibratoDepthSemitones(static_cast<float>(vibratoVar.getProperty("depthSemitones", 0.0)));
         note.setVibratoPhaseRadians(static_cast<float>(vibratoVar.getProperty("phaseRadians", 0.0)));
     }
 
     // Lyric/Phoneme
-    auto lyric = json.getProperty("lyric", juce::var());
-    if (!lyric.isVoid())
-        note.setLyric(lyric.toString());
-
-    auto phoneme = json.getProperty("phoneme", juce::var());
-    if (!phoneme.isVoid())
-        note.setPhoneme(phoneme.toString());
+    if (json.hasProperty("lyric"))
+        note.setLyric(json.getProperty("lyric", "").toString());
+    if (json.hasProperty("phoneme"))
+        note.setPhoneme(json.getProperty("phoneme", "").toString());
 
     // Pitch tool transformation parameters (with defaults for backwards compatibility)
     note.setTiltLeft(static_cast<float>(json.getProperty("tiltLeft", 0.0)));
     note.setTiltRight(static_cast<float>(json.getProperty("tiltRight", 0.0)));
     note.setVarianceScale(static_cast<float>(json.getProperty("varianceScale", 1.0)));
-    note.setSmoothLeftFrames(json.getProperty("smoothLeftFrames", 0));
-    note.setSmoothRightFrames(json.getProperty("smoothRightFrames", 0));
-
-    // Per-note original delta pitch (pristine curve from analysis)
-    auto origDeltaStr = json.getProperty("originalDeltaPitch", juce::var());
-    if (!origDeltaStr.isVoid() && origDeltaStr.toString().isNotEmpty())
-        note.setOriginalDeltaPitch(stringToFloatArray(origDeltaStr.toString()));
-
-    // Per-note delta scale/offset
-    note.setDeltaScale(static_cast<float>(json.getProperty("deltaScale", 1.0)));
-    note.setDeltaOffset(static_cast<float>(json.getProperty("deltaOffset", 0.0)));
 
     return true;
 }
@@ -321,8 +292,6 @@ juce::var ProjectSerializer::pitchDataToJson(const AudioData& audioData) {
     obj->setProperty("f0", floatArrayToString(audioData.f0, 2));
     obj->setProperty("basePitch", floatArrayToString(audioData.basePitch, 4));
     obj->setProperty("deltaPitch", floatArrayToString(audioData.deltaPitch, 4));
-    obj->setProperty("voicedMask", boolArrayToString(audioData.voicedMask));
-    obj->setProperty("vadMask", boolArrayToString(audioData.vadMask));
 
     return juce::var(obj);
 }
@@ -332,14 +301,12 @@ bool ProjectSerializer::pitchDataFromJson(AudioData& audioData, const juce::var&
         return false;
 
     audioData.f0 = stringToFloatArray(json.getProperty("f0", "").toString());
-    audioData.baseF0 = audioData.f0; // Initialize baseF0 from loaded f0
     audioData.basePitch = stringToFloatArray(json.getProperty("basePitch", "").toString());
     audioData.deltaPitch = stringToFloatArray(json.getProperty("deltaPitch", "").toString());
-    audioData.voicedMask = stringToBoolArray(json.getProperty("voicedMask", "").toString());
-    audioData.vadMask = stringToBoolArray(json.getProperty("vadMask", "").toString());
-
+    
     return true;
 }
+
 
 juce::String ProjectSerializer::floatArrayToString(const std::vector<float>& arr, int precision) {
     if (arr.empty())
@@ -368,34 +335,6 @@ std::vector<float> ProjectSerializer::stringToFloatArray(const juce::String& str
     for (const auto& p : parts) {
         if (p.isNotEmpty())
             result.push_back(p.getFloatValue());
-    }
-
-    return result;
-}
-
-juce::String ProjectSerializer::boolArrayToString(const std::vector<bool>& arr) {
-    if (arr.empty())
-        return {};
-
-    juce::String result;
-    result.preallocateBytes(arr.size());
-
-    for (bool b : arr) {
-        result << (b ? '1' : '0');
-    }
-
-    return result;
-}
-
-std::vector<bool> ProjectSerializer::stringToBoolArray(const juce::String& str) {
-    if (str.isEmpty())
-        return {};
-
-    std::vector<bool> result;
-    result.reserve(static_cast<size_t>(str.length()));
-
-    for (int i = 0; i < str.length(); ++i) {
-        result.push_back(str[i] == '1');
     }
 
     return result;

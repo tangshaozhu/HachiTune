@@ -184,30 +184,6 @@ void PitchToolController::applyOperation(std::vector<Note*>& notes,
         note->setMidiNote(origParams.midiNote + currentTiltMean);
         break;
       }
-      case PitchToolHandles::HandleType::SmoothLeft:
-      {
-        // Drag RIGHT (positive X) into note = more smoothing
-        // 5px per additional frame, range [5, 50]
-        const int transitionFrames = juce::jlimit(5, 50, 5 + static_cast<int>(dragDeltaX / 5.0f));
-        note->setSmoothLeftFrames(transitionFrames);
-        
-        // Preserve tilt offset when adjusting smoothing
-        const float currentTiltMean = (note->getTiltLeft() + note->getTiltRight()) / 2.0f;
-        note->setMidiNote(origParams.midiNote + currentTiltMean);
-        break;
-      }
-      case PitchToolHandles::HandleType::SmoothRight:
-      {
-        // Drag LEFT (negative X) into note = more smoothing
-        // Use -dragDeltaX so LEFT drag increases frames
-        const int transitionFrames = juce::jlimit(5, 50, 5 + static_cast<int>(-dragDeltaX / 5.0f));
-        note->setSmoothRightFrames(transitionFrames);
-        
-        // Preserve tilt offset when adjusting smoothing
-        const float currentTiltMean = (note->getTiltLeft() + note->getTiltRight()) / 2.0f;
-        note->setMidiNote(origParams.midiNote + currentTiltMean);
-        break;
-      }
       case PitchToolHandles::HandleType::HighPassFlatten:
       {
         // Drag DOWN (positive Y) = increase flattening, drag UP (negative Y) = decrease

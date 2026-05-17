@@ -64,14 +64,8 @@ void PitchToolHandles::updateHandles(const std::vector<Note*>& selectedNotes,
 
   // 3. Reduce Variance: Top edge, horizontally centered
   addHandle(HandleType::ReduceVariance, centerX, topY);
-
-  // 4. Smooth Left: Top-Left corner
-  addHandle(HandleType::SmoothLeft, leftX, topY);
-
-  // 5. Smooth Right: Top-Right corner
-  addHandle(HandleType::SmoothRight, rightX, topY);
   
-  // 6. High Pass Flatten: Bottom-Right corner (右下角)
+  // 4. High Pass Flatten: Bottom-Right corner (右下角)
   addHandle(HandleType::HighPassFlatten, rightX, bottomY);
 }
 
@@ -127,11 +121,7 @@ juce::Colour PitchToolHandles::getColorForType(PitchToolHandles::HandleType type
       return juce::Colours::cyan;
     case HandleType::ReduceVariance:
       return juce::Colours::yellow;
-    case HandleType::SmoothLeft:
-      return juce::Colours::orange;
-    case HandleType::SmoothRight:
-      return juce::Colours::orange;
-    case HandleType::HighPassFlatten:  // 新增高通滤波手柄颜色
+    case HandleType::HighPassFlatten:  // 高通滤波手柄颜色
       return juce::Colours::green;
     case HandleType::None:
       return juce::Colours::white;

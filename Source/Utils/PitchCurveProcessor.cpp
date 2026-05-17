@@ -300,8 +300,6 @@ namespace PitchCurveProcessor
                 note.getTiltLeft(),
                 note.getTiltRight(),
                 note.getVarianceScale(),
-                note.getSmoothLeftFrames(),
-                note.getSmoothRightFrames(),
                 note.getHighPassCutoff(),
                 context
             );
@@ -394,8 +392,6 @@ namespace PitchCurveProcessor
                 note.getTiltLeft(),
                 note.getTiltRight(),
                 note.getVarianceScale(),
-                note.getSmoothLeftFrames(),
-                note.getSmoothRightFrames(),
                 note.getHighPassCutoff(),
                 context
             );
@@ -452,8 +448,6 @@ namespace PitchCurveProcessor
                 note.getTiltLeft(),
                 note.getTiltRight(),
                 note.getVarianceScale(),
-                note.getSmoothLeftFrames(),
-                note.getSmoothRightFrames(),
                 note.getHighPassCutoff(),
                 context
             );
@@ -495,3 +489,4 @@ namespace PitchCurveProcessor
         }
     }
 } // namespace PitchCurveProcessor
+

@@ -14,9 +14,7 @@ public:
     TiltLeft,
     TiltRight,
     ReduceVariance,
-    SmoothLeft,
-    SmoothRight,
-    HighPassFlatten,  // 新增高通滤波手柄
+    HighPassFlatten,  // 高通滤波手柄
     None
   };
 

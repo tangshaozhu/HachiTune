@@ -153,10 +153,8 @@ std::vector<float> applyAllTransformations(const std::vector<float>& originalDel
                                            float tiltLeft,
                                            float tiltRight,
                                            float varianceScale,
-                                           int smoothLeftFrames,
-                                           int smoothRightFrames,
                                            float highPassCutoff,
-                                           const AdjacentNoteContext& adjacentContext) {
+                                           const AdjacentNoteContext& /*adjacentContext*/) {
   if (originalDelta.empty()) {
     return {};
   }
@@ -183,17 +181,6 @@ std::vector<float> applyAllTransformations(const std::vector<float>& originalDel
   // 3. Apply high-pass flattening if needed
   if (std::abs(highPassCutoff) > 0.001f) {
     result = highPassFlatten(result, highPassCutoff);
-  }
-
-  // 4. Apply boundary smoothing AFTER variance scaling and high-pass filtering
-  if (smoothLeftFrames > 0) {
-    const float leftTarget = adjacentContext.hasLeft ? adjacentContext.leftBoundaryDelta : 0.0f;
-    result = smoothBoundary(result, 0, smoothLeftFrames, leftTarget);
-  }
-  
-  if (smoothRightFrames > 0) {
-    const float rightTarget = adjacentContext.hasRight ? adjacentContext.rightBoundaryDelta : 0.0f;
-    result = smoothBoundary(result, 1, smoothRightFrames, rightTarget);
   }
 
   return result;
@@ -305,5 +292,4 @@ std::vector<float> highPassFlatten(const std::vector<float>& deltapitch, float c
     
     return result;
 }
-
 } // namespace PitchToolOperations

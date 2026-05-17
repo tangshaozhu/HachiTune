@@ -11,9 +11,7 @@ struct TransformParams
     float tiltLeft = 0.0f;
     float tiltRight = 0.0f;
     float varianceScale = 1.0f;
-    int smoothLeftFrames = 0;
-    int smoothRightFrames = 0;
-    float highPassCutoff = 0.0f;  // 高通滤波参数
+    float highPassCutoff = 0.0f;
     float midiNote = 0.0f;
     float deltaScale = 1.0f;
     float deltaOffset = 0.0f;
@@ -27,9 +25,7 @@ struct TransformParams
         p.tiltLeft = note.getTiltLeft();
         p.tiltRight = note.getTiltRight();
         p.varianceScale = note.getVarianceScale();
-        p.smoothLeftFrames = note.getSmoothLeftFrames();
-        p.smoothRightFrames = note.getSmoothRightFrames();
-        p.highPassCutoff = note.getHighPassCutoff();  // 添加高通滤波参数获取
+        p.highPassCutoff = note.getHighPassCutoff();
         p.midiNote = note.getMidiNote();
         p.deltaScale = note.getDeltaScale();
         p.deltaOffset = note.getDeltaOffset();
@@ -43,9 +39,7 @@ struct TransformParams
         note.setTiltLeft(tiltLeft);
         note.setTiltRight(tiltRight);
         note.setVarianceScale(varianceScale);
-        note.setSmoothLeftFrames(smoothLeftFrames);
-        note.setSmoothRightFrames(smoothRightFrames);
-        note.setHighPassCutoff(highPassCutoff);  // 添加高通滤波参数应用
+        note.setHighPassCutoff(highPassCutoff);
         note.setDeltaScale(deltaScale);
         note.setDeltaOffset(deltaOffset);
     }
@@ -55,8 +49,6 @@ struct TransformParams
         return tiltLeft == other.tiltLeft &&
                tiltRight == other.tiltRight &&
                varianceScale == other.varianceScale &&
-               smoothLeftFrames == other.smoothLeftFrames &&
-               smoothRightFrames == other.smoothRightFrames &&
                midiNote == other.midiNote &&
                deltaScale == other.deltaScale &&
                deltaOffset == other.deltaOffset;
@@ -72,8 +64,6 @@ struct TransformParams
         return tiltLeft == 0.0f &&
                tiltRight == 0.0f &&
                varianceScale == 1.0f &&
-               smoothLeftFrames == 0 &&
-               smoothRightFrames == 0 &&
                deltaScale == 1.0f &&
                deltaOffset == 0.0f;
     }
