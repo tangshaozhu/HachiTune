@@ -24,136 +24,32 @@ IncrementalSynthesizer::computeSynthesisRange(int dirtyStart, int dirtyEnd) {
 
   auto &audioData = project->getAudioData();
   auto &voicedMask = audioData.voicedMask;
-  const auto &originalWaveform = audioData.originalWaveform.getNumSamples() > 0
-                                     ? audioData.originalWaveform
-                                     : audioData.waveform;
   
   const int totalFrames = static_cast<int>(voicedMask.size());
-  const int totalSamples = originalWaveform.getNumSamples();
-  const int hopSize = vocoder ? vocoder->getHopSize() : 512;
-  
-  if (totalFrames == 0 || totalSamples == 0)
+  if (totalFrames == 0)
     return {dirtyStart, dirtyEnd};
 
   dirtyStart = std::max(0, dirtyStart);
   dirtyEnd = std::min(totalFrames, dirtyEnd);
 
-  // Reduced gap bridging to minimize synthesis scope
-  constexpr int kGapBridgeFrames = 8;  // Reduced from 16 to avoid chaining too many notes
-  constexpr int kMinSearchRangeFrames = 4;   // Minimum search range for low-energy boundary
-  constexpr int kMaxSearchRangeFrames = 32;  // Reduced from 64 to limit expansion
-  
-  // Energy threshold for detecting "quiet" boundaries
-  // Calculate adaptive threshold based on audio content
-  float globalRms = 0.0f;
-  {
-    const float* ptr = originalWaveform.getReadPointer(0);
-    const int checkSamples = std::min(totalSamples, hopSize * 100); // Check first ~50ms
-    for (int i = 0; i < checkSamples; ++i) {
-      globalRms += ptr[i] * ptr[i];
-    }
-    globalRms = std::sqrt(globalRms / static_cast<float>(checkSamples));
-  }
-  const float kEnergyThreshold = globalRms * 0.05f; // 5% of global RMS as silence threshold
-
   auto isVoiced = [&](int idx) -> bool {
     return idx >= 0 && idx < totalFrames && static_cast<bool>(voicedMask[idx]);
   };
 
-  // Helper: calculate RMS energy in a small window around a frame
-  auto calcFrameEnergy = [&](int frameIdx) -> float {
-    const int sampleIdx = frameIdx * hopSize;
-    const int windowSize = std::min(hopSize / 2, 128); // Smaller window for precision
-    const int startSample = std::max(0, sampleIdx - windowSize / 2);
-    const int endSample = std::min(totalSamples, sampleIdx + windowSize / 2);
-    
-    if (endSample <= startSample)
-      return 0.0f;
-    
-    float sumSq = 0.0f;
-    const float* ptr = originalWaveform.getReadPointer(0);
-    for (int i = startSample; i < endSample; ++i) {
-      sumSq += ptr[i] * ptr[i];
-    }
-    return std::sqrt(sumSq / static_cast<float>(endSample - startSample));
-  };
-
-  // Helper: find lowest energy position in a search range, but stop at voiced boundaries
-  auto findLowEnergyBoundary = [&](int centerFrame, int searchBackward, 
-                                    int searchForward, bool stopAtVoiced) -> int {
-    const int searchStart = std::max(0, centerFrame - searchBackward);
-    const int searchEnd = std::min(totalFrames, centerFrame + searchForward);
-    
-    int bestPos = centerFrame;
-    float minEnergy = calcFrameEnergy(centerFrame);
-    
-    for (int f = searchStart; f < searchEnd; ++f) {
-      // If stopping at voiced boundaries, don't cross into voiced regions
-      if (stopAtVoiced && isVoiced(f)) {
-        break;
-      }
-      
-      const float energy = calcFrameEnergy(f);
-      if (energy < minEnergy) {
-        minEnergy = energy;
-        bestPos = f;
-      }
-    }
-    
-    // Only use the boundary if it's sufficiently quiet
-    if (minEnergy > kEnergyThreshold) {
-      return centerFrame; // Fall back to original position if no quiet boundary found
-    }
-    
-    return bestPos;
-  };
-
-  // Expand backward to include neighboring voiced segments across short gaps.
+  // Expand backward: stop immediately at unvoiced region (no gap bridging)
   int start = dirtyStart;
-  int backGap = 0;
-  while (start > 0) {
-    if (isVoiced(start - 1)) {
-      --start;
-      backGap = 0;
-      continue;
-    }
-    if (backGap < kGapBridgeFrames) {
-      --start;
-      ++backGap;
-      continue;
-    }
-    break;
+  while (start > 0 && isVoiced(start - 1)) {
+    --start;
   }
-  
-  // Now search for low-energy boundary before 'start'
-  // Limit search to avoid expanding too far
-  const int backwardSearchRange = std::min(kMaxSearchRangeFrames, 
-                                            std::max(kMinSearchRangeFrames, backGap + 4));
-  // Stop at voiced regions to avoid including other notes
-  start = findLowEnergyBoundary(start, backwardSearchRange, 0, true);
+  // CRITICAL: Stop at first unvoiced frame - no gap tolerance for synthesis triggering
 
-  // Expand forward to include neighboring voiced segments across short gaps.
+  // Expand forward: stop immediately at unvoiced region (no gap bridging)
   int end = dirtyEnd;
-  int fwdGap = 0;
-  while (end < totalFrames) {
-    if (isVoiced(end)) {
-      ++end;
-      fwdGap = 0;
-      continue;
-    }
-    if (fwdGap < kGapBridgeFrames) {
-      ++end;
-      ++fwdGap;
-      continue;
-    }
-    break;
+  while (end < totalFrames && isVoiced(end)) {
+    ++end;
   }
+  // CRITICAL: Stop at first unvoiced frame - no gap tolerance for synthesis triggering
   
-  // Now search for low-energy boundary after 'end'
-  const int forwardSearchRange = std::min(kMaxSearchRangeFrames,
-                                           std::max(kMinSearchRangeFrames, fwdGap + 4));
-  // Stop at voiced regions to avoid including other notes
-  end = findLowEnergyBoundary(end, 0, forwardSearchRange, true);
   return {start, end};
 }
 
