@@ -39,13 +39,19 @@ void SplitHandler::mouseMove(const juce::MouseEvent &e, float worldX,
     // We're near a boundary - show merge highlight
     isNearBoundary_ = true;
     boundaryHighlightX = boundaryX;
-    boundaryLeftNote = boundaryNote;
     
-    // Find the right note (the one that starts where left note ends)
+    // Store frame numbers instead of pointers to avoid dangling pointer issues
+    boundaryLeftStartFrame = boundaryNote->getStartFrame();
+    boundaryLeftEndFrame = boundaryNote->getEndFrame();
+    
+    // Find the right note and store its frame numbers
     auto& notes = owner_.project->getNotes();
-    for (auto& n : notes) {
+    boundaryRightStartFrame = -1;
+    boundaryRightEndFrame = -1;
+    for (const auto& n : notes) {
       if (!n.isRest() && n.getStartFrame() == boundaryNote->getEndFrame()) {
-        boundaryRightNote = &n;
+        boundaryRightStartFrame = n.getStartFrame();
+        boundaryRightEndFrame = n.getEndFrame();
         break;
       }
     }
@@ -57,8 +63,10 @@ void SplitHandler::mouseMove(const juce::MouseEvent &e, float worldX,
     // Not near boundary - show normal split guide
     isNearBoundary_ = false;
     boundaryHighlightX = -1.0f;
-    boundaryLeftNote = nullptr;
-    boundaryRightNote = nullptr;
+    boundaryLeftStartFrame = -1;
+    boundaryLeftEndFrame = -1;
+    boundaryRightStartFrame = -1;
+    boundaryRightEndFrame = -1;
     
     Note *note = owner_.noteSplitter->findNoteAt(worldX, worldY);
     if (note) {
@@ -78,15 +86,17 @@ void SplitHandler::mouseDoubleClick(const juce::MouseEvent &e, float worldX,
   juce::ignoreUnused(e, worldX, worldY);
   
   // Only merge if we're near a boundary
-  if (isNearBoundary_ && boundaryLeftNote && boundaryRightNote) {
-    owner_.noteSplitter->mergeNotes(boundaryLeftNote, boundaryRightNote);
+  if (isNearBoundary_) {
+    // Get notes through safe getter methods that find by frame numbers
+    Note* leftNote = getBoundaryLeftNote();
+    Note* rightNote = getBoundaryRightNote();
+    
+    if (leftNote && rightNote) {
+      owner_.noteSplitter->mergeNotes(leftNote, rightNote);
+    }
     
     // Clear the highlight after merging
-    isNearBoundary_ = false;
-    boundaryHighlightX = -1.0f;
-    boundaryLeftNote = nullptr;
-    boundaryRightNote = nullptr;
-    
+    clearGuide();
     owner_.repaint();
   }
 }
@@ -102,15 +112,51 @@ void SplitHandler::clearGuide() {
     needsRepaint = true;
   }
   
-  if (isNearBoundary_) {
+  // Always clear boundary state to prevent dangling pointers
+  if (isNearBoundary_ || boundaryLeftStartFrame >= 0 || boundaryRightStartFrame >= 0) {
     isNearBoundary_ = false;
     boundaryHighlightX = -1.0f;
-    boundaryLeftNote = nullptr;
-    boundaryRightNote = nullptr;
+    boundaryLeftStartFrame = -1;
+    boundaryLeftEndFrame = -1;
+    boundaryRightStartFrame = -1;
+    boundaryRightEndFrame = -1;
     needsRepaint = true;
   }
   
   if (needsRepaint) {
     owner_.repaint();
   }
+}
+
+// Safe getter methods that find notes by frame numbers (not stored pointers)
+Note* SplitHandler::getBoundaryLeftNote() const {
+  if (!owner_.project || boundaryLeftStartFrame < 0) {
+    return nullptr;
+  }
+  
+  auto& notes = owner_.project->getNotes();
+  for (const auto& n : notes) {
+    if (!n.isRest() && 
+        n.getStartFrame() == boundaryLeftStartFrame && 
+        n.getEndFrame() == boundaryLeftEndFrame) {
+      return const_cast<Note*>(&n);  // Temporary pointer, only valid for current call
+    }
+  }
+  return nullptr;
+}
+
+Note* SplitHandler::getBoundaryRightNote() const {
+  if (!owner_.project || boundaryRightStartFrame < 0) {
+    return nullptr;
+  }
+  
+  auto& notes = owner_.project->getNotes();
+  for (const auto& n : notes) {
+    if (!n.isRest() && 
+        n.getStartFrame() == boundaryRightStartFrame && 
+        n.getEndFrame() == boundaryRightEndFrame) {
+      return const_cast<Note*>(&n);  // Temporary pointer, only valid for current call
+    }
+  }
+  return nullptr;
 }
