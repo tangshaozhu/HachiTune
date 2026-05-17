@@ -1136,6 +1136,170 @@ void EditorController::segmentIntoNotes(Project &targetProject,
                 });
     }
 
+    // ============================================================
+    // Phase 1.5: Adjust boundaries at unvoiced gaps
+    // If two adjacent notes have an unvoiced gap between them,
+    // move both boundaries to the middle of the unvoiced region.
+    // This avoids placing boundaries at the edge of unvoiced regions
+    // where transitional noise may exist.
+    // ============================================================
+    if (notes.size() > 1 && !audioData.voicedMask.empty())
+    {
+      for (size_t i = 0; i + 1 < notes.size(); ++i)
+      {
+        auto& noteA = notes[i];
+        auto& noteB = notes[i + 1];
+        
+        int endA = noteA.getEndFrame();
+        int startB = noteB.getStartFrame();
+        
+        // Check if there's a gap between notes
+        if (startB <= endA) continue; // No gap or overlapping
+        
+        // Find the unvoiced region between noteA and noteB
+        int unvoicedStart = endA;
+        int unvoicedEnd = startB;
+        
+        // Verify that the entire gap is unvoiced
+        bool allUnvoiced = true;
+        for (int g = unvoicedStart; g < unvoicedEnd; ++g)
+        {
+          if (g < static_cast<int>(audioData.voicedMask.size()) && 
+              audioData.voicedMask[static_cast<size_t>(g)])
+          {
+            allUnvoiced = false;
+            break;
+          }
+        }
+        
+        if (!allUnvoiced) continue; // Gap contains voiced frames, skip
+        
+        // Calculate the middle of the unvoiced region
+        int midPoint = (unvoicedStart + unvoicedEnd) / 2;
+        
+        // Adjust boundaries to the midpoint
+        noteA.setEndFrame(midPoint);
+        noteB.setStartFrame(midPoint);
+        
+        // Update F0 values for both notes
+        {
+          std::vector<float> f0A(audioData.f0.begin() + noteA.getStartFrame(),
+                                 audioData.f0.begin() + noteA.getEndFrame());
+          noteA.setF0Values(std::move(f0A));
+        }
+        {
+          std::vector<float> f0B(audioData.f0.begin() + noteB.getStartFrame(),
+                                 audioData.f0.begin() + noteB.getEndFrame());
+          noteB.setF0Values(std::move(f0B));
+        }
+      }
+    }
+
+    // ============================================================
+    // Phase 1.6: Merge short notes into adjacent voiced regions
+    // After boundary adjustment, some notes may become too short.
+    // Merge them into the nearest adjacent note to avoid fragmentation.
+    // Note: "short" is determined by voiced frame count, not total length.
+    // ============================================================
+    if (notes.size() > 1 && !audioData.voicedMask.empty())
+    {
+      constexpr int kMinVoicedFrames = 5; // Minimum voiced frames
+      
+      bool merged = true;
+      while (merged)
+      {
+        merged = false;
+        
+        for (size_t i = 0; i < notes.size(); ++i)
+        {
+          auto& note = notes[i];
+          
+          // Count voiced frames in this note
+          int voicedCount = 0;
+          for (int f = note.getStartFrame(); f < note.getEndFrame(); ++f)
+          {
+            if (f < static_cast<int>(audioData.voicedMask.size()) && 
+                audioData.voicedMask[static_cast<size_t>(f)])
+            {
+              voicedCount++;
+            }
+          }
+          
+          // Skip if note has enough voiced frames
+          if (voicedCount >= kMinVoicedFrames) continue;
+          
+          // Find best neighbor to merge into (prefer the longer one)
+          bool mergedIntoLeft = false;
+          bool mergedIntoRight = false;
+          
+          int leftVoicedCount = 0;
+          int rightVoicedCount = 0;
+          
+          if (i > 0)
+          {
+            const auto& leftNote = notes[i - 1];
+            for (int f = leftNote.getStartFrame(); f < leftNote.getEndFrame(); ++f)
+            {
+              if (f < static_cast<int>(audioData.voicedMask.size()) && 
+                  audioData.voicedMask[static_cast<size_t>(f)])
+              {
+                leftVoicedCount++;
+              }
+            }
+          }
+          
+          if (i + 1 < notes.size())
+          {
+            const auto& rightNote = notes[i + 1];
+            for (int f = rightNote.getStartFrame(); f < rightNote.getEndFrame(); ++f)
+            {
+              if (f < static_cast<int>(audioData.voicedMask.size()) && 
+                  audioData.voicedMask[static_cast<size_t>(f)])
+              {
+                rightVoicedCount++;
+              }
+            }
+          }
+          
+          // Prefer merging into the neighbor with more voiced frames
+          if (i > 0 && (i + 1 >= notes.size() || leftVoicedCount >= rightVoicedCount))
+          {
+            // Merge into left neighbor
+            auto& leftNote = notes[i - 1];
+            leftNote.setEndFrame(note.getEndFrame());
+            
+            // Update F0 values
+            std::vector<float> f0Left(audioData.f0.begin() + leftNote.getStartFrame(),
+                                      audioData.f0.begin() + leftNote.getEndFrame());
+            leftNote.setF0Values(std::move(f0Left));
+            
+            mergedIntoLeft = true;
+          }
+          else if (i + 1 < notes.size())
+          {
+            // Merge into right neighbor
+            auto& rightNote = notes[i + 1];
+            rightNote.setStartFrame(note.getStartFrame());
+            
+            // Update F0 values
+            std::vector<float> f0Right(audioData.f0.begin() + rightNote.getStartFrame(),
+                                       audioData.f0.begin() + rightNote.getEndFrame());
+            rightNote.setF0Values(std::move(f0Right));
+            
+            mergedIntoRight = true;
+          }
+          
+          // Remove the short note
+          if (mergedIntoLeft || mergedIntoRight)
+          {
+            notes.erase(notes.begin() + i);
+            merged = true;
+            break; // Restart scanning from beginning
+          }
+        }
+      }
+    }
+
     // VAD + GAME rest-guided boundary refinement:
     // expand note heads/tails into energetic consonant regions so note lengths
     // better cover pre/post-consonants.
@@ -1204,6 +1368,11 @@ void EditorController::segmentIntoNotes(Project &targetProject,
         for (int i = start - 1; i >= std::max(prevEnd, start - kMaxHeadFrames);
              --i)
         {
+          // CRITICAL: Stop at unvoiced regions
+          if (i < static_cast<int>(audioData.voicedMask.size()) && 
+              !audioData.voicedMask[static_cast<size_t>(i)])
+            break;
+          
           if (i >= 0 && i < static_cast<int>(audioData.vadMask.size()) &&
               audioData.vadMask[static_cast<size_t>(i)])
             newStart = i;
@@ -1214,6 +1383,11 @@ void EditorController::segmentIntoNotes(Project &targetProject,
         int newEnd = end;
         for (int i = end; i < std::min(nextStart, end + kMaxTailFrames); ++i)
         {
+          // CRITICAL: Stop at unvoiced regions
+          if (i < static_cast<int>(audioData.voicedMask.size()) && 
+              !audioData.voicedMask[static_cast<size_t>(i)])
+            break;
+          
           if (i >= 0 && i < static_cast<int>(audioData.vadMask.size()) &&
               audioData.vadMask[static_cast<size_t>(i)])
             newEnd = i + 1;
