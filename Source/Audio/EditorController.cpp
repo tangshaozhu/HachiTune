@@ -1264,29 +1264,63 @@ void EditorController::segmentIntoNotes(Project &targetProject,
           // Prefer merging into the neighbor with more voiced frames
           if (i > 0 && (i + 1 >= notes.size() || leftVoicedCount >= rightVoicedCount))
           {
-            // Merge into left neighbor
+            // CRITICAL: Check if there's an unvoiced region between this note and left neighbor
             auto& leftNote = notes[i - 1];
-            leftNote.setEndFrame(note.getEndFrame());
+            int boundaryFrame = leftNote.getEndFrame();
             
-            // Update F0 values
-            std::vector<float> f0Left(audioData.f0.begin() + leftNote.getStartFrame(),
-                                      audioData.f0.begin() + leftNote.getEndFrame());
-            leftNote.setF0Values(std::move(f0Left));
+            bool hasUnvoicedGap = false;
+            constexpr int CHECK_WINDOW = 3; // Check 3 frames before and after boundary
             
-            mergedIntoLeft = true;
+            for (int f = boundaryFrame - CHECK_WINDOW; f < boundaryFrame + CHECK_WINDOW; ++f) {
+              if (f >= 0 && f < static_cast<int>(audioData.voicedMask.size())) {
+                if (!audioData.voicedMask[static_cast<size_t>(f)]) {
+                  hasUnvoicedGap = true;
+                  break;
+                }
+              }
+            }
+            
+            if (!hasUnvoicedGap) {
+              // Merge into left neighbor
+              leftNote.setEndFrame(note.getEndFrame());
+              
+              // Update F0 values
+              std::vector<float> f0Left(audioData.f0.begin() + leftNote.getStartFrame(),
+                                        audioData.f0.begin() + leftNote.getEndFrame());
+              leftNote.setF0Values(std::move(f0Left));
+              
+              mergedIntoLeft = true;
+            }
           }
           else if (i + 1 < notes.size())
           {
-            // Merge into right neighbor
+            // CRITICAL: Check if there's an unvoiced region between this note and right neighbor
             auto& rightNote = notes[i + 1];
-            rightNote.setStartFrame(note.getStartFrame());
+            int boundaryFrame = note.getEndFrame();
             
-            // Update F0 values
-            std::vector<float> f0Right(audioData.f0.begin() + rightNote.getStartFrame(),
-                                       audioData.f0.begin() + rightNote.getEndFrame());
-            rightNote.setF0Values(std::move(f0Right));
+            bool hasUnvoicedGap = false;
+            constexpr int CHECK_WINDOW = 3; // Check 3 frames before and after boundary
             
-            mergedIntoRight = true;
+            for (int f = boundaryFrame - CHECK_WINDOW; f < boundaryFrame + CHECK_WINDOW; ++f) {
+              if (f >= 0 && f < static_cast<int>(audioData.voicedMask.size())) {
+                if (!audioData.voicedMask[static_cast<size_t>(f)]) {
+                  hasUnvoicedGap = true;
+                  break;
+                }
+              }
+            }
+            
+            if (!hasUnvoicedGap) {
+              // Merge into right neighbor
+              rightNote.setStartFrame(note.getStartFrame());
+              
+              // Update F0 values
+              std::vector<float> f0Right(audioData.f0.begin() + rightNote.getStartFrame(),
+                                         audioData.f0.begin() + rightNote.getEndFrame());
+              rightNote.setF0Values(std::move(f0Right));
+              
+              mergedIntoRight = true;
+            }
           }
           
           // Remove the short note

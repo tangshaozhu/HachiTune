@@ -384,6 +384,30 @@ Note* NoteSplitter::findNoteBoundaryAt(float x, float y, float& boundaryX) {
         
         // Check if notes are adjacent (within 1 frame tolerance)
         if (std::abs(leftNote->getEndFrame() - rightNote->getStartFrame()) <= 1) {
+            // CRITICAL: Check if there's an unvoiced region at the boundary
+            // If so, don't trigger merge hint to avoid confusing the user
+            const auto& audioData = project->getAudioData();
+            if (!audioData.voicedMask.empty()) {
+                int boundaryFrame = leftNote->getEndFrame();
+                
+                bool hasUnvoicedGap = false;
+                constexpr int CHECK_WINDOW = 3; // Check 3 frames before and after boundary
+                
+                for (int f = boundaryFrame - CHECK_WINDOW; f < boundaryFrame + CHECK_WINDOW; ++f) {
+                    if (f >= 0 && f < static_cast<int>(audioData.voicedMask.size())) {
+                        if (!audioData.voicedMask[static_cast<size_t>(f)]) {
+                            hasUnvoicedGap = true;
+                            break;
+                        }
+                    }
+                }
+                
+                // Skip this boundary if it crosses an unvoiced region
+                if (hasUnvoicedGap) {
+                    continue;
+                }
+            }
+            
             float leftEndX = framesToSeconds(leftNote->getEndFrame()) * pixelsPerSecond;
             float rightStartX = framesToSeconds(rightNote->getStartFrame()) * pixelsPerSecond;
             
@@ -408,6 +432,32 @@ bool NoteSplitter::mergeNotes(Note* leftNote, Note* rightNote) {
     // Verify notes are adjacent
     if (leftNote->getEndFrame() != rightNote->getStartFrame())
         return false;
+    
+    // CRITICAL: Check if there's an unvoiced region between the two notes
+    // Merging across unvoiced regions is not allowed
+    const auto& audioData = project->getAudioData();
+    if (!audioData.voicedMask.empty()) {
+        int boundaryFrame = leftNote->getEndFrame();
+        
+        // Check a small window around the boundary for unvoiced frames
+        // This prevents merging when there's a gap of non-voiced frames
+        constexpr int CHECK_WINDOW = 3; // Check 3 frames before and after boundary
+        
+        bool hasUnvoicedGap = false;
+        for (int f = boundaryFrame - CHECK_WINDOW; f < boundaryFrame + CHECK_WINDOW; ++f) {
+            if (f >= 0 && f < static_cast<int>(audioData.voicedMask.size())) {
+                if (!audioData.voicedMask[static_cast<size_t>(f)]) {
+                    hasUnvoicedGap = true;
+                    break;
+                }
+            }
+        }
+        
+        if (hasUnvoicedGap) {
+            // Cannot merge across unvoiced region
+            return false;
+        }
+    }
     
     // Store original notes for undo
     Note leftNoteSnapshot = *leftNote;
