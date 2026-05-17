@@ -54,56 +54,48 @@ private:
     std::function<void(Note *)> onNoteChanged;
 };
 
-/**
- * Action for adjusting boundary between two adjacent notes.
- * Follows the EXACT same pattern as NoteMergeAction: remove old notes, add new notes.
- */
 class NoteBoundaryAdjustAction : public UndoableAction
 {
 public:
-    NoteBoundaryAdjustAction(Project* project, 
+    NoteBoundaryAdjustAction(Note *leftNote, Note *rightNote,
                            const Note &originalLeft, const Note &originalRight,
-                           const Note &adjustedLeft, const Note &adjustedRight,
+                           const Note &changedLeft, const Note &changedRight,
                            std::function<void()> onChanged = nullptr)
-        : project(project),
+        : leftNote(leftNote), rightNote(rightNote),
           originalLeftNote(originalLeft), originalRightNote(originalRight),
-          adjustedLeftNote(adjustedLeft), adjustedRightNote(adjustedRight),
+          changedLeftNote(changedLeft), changedRightNote(changedRight),
           onChanged(onChanged) {}
 
     void undo() override
     {
-        if (!project) return;
+        if (!leftNote || !rightNote) return;
         
-        // Remove the adjusted notes by finding them via startFrame (same as NoteMergeAction)
-        auto& notes = project->getNotes();
+        // Store current durations to handle delta pitch resizing
+        int currentLeftDuration = leftNote->getEndFrame() - leftNote->getStartFrame();
+        int currentRightDuration = rightNote->getEndFrame() - rightNote->getStartFrame();
         
-        bool leftRemoved = false;
-        bool rightRemoved = false;
+        // Restore original states
+        leftNote->setStartFrame(originalLeftNote.getStartFrame());
+        leftNote->setEndFrame(originalLeftNote.getEndFrame());
+        leftNote->setSrcStartFrame(originalLeftNote.getSrcStartFrame());
+        leftNote->setSrcEndFrame(originalLeftNote.getSrcEndFrame());
         
-        for (auto it = notes.begin(); it != notes.end(); ) {
-            if (!leftRemoved && it->getStartFrame() == adjustedLeftNote.getStartFrame()) {
-                it = notes.erase(it);
-                leftRemoved = true;
-            } else if (!rightRemoved && it->getStartFrame() == adjustedRightNote.getStartFrame()) {
-                it = notes.erase(it);
-                rightRemoved = true;
-            } else {
-                ++it;
-            }
-            
-            if (leftRemoved && rightRemoved) break;
-        }
+        rightNote->setStartFrame(originalRightNote.getStartFrame());
+        rightNote->setEndFrame(originalRightNote.getEndFrame());
+        rightNote->setSrcStartFrame(originalRightNote.getSrcStartFrame());
+        rightNote->setSrcEndFrame(originalRightNote.getSrcEndFrame());
         
-        // Only restore original notes if both adjusted notes were successfully removed
-        if (leftRemoved && rightRemoved) {
-            project->addNote(originalLeftNote);
-            project->addNote(originalRightNote);
-        } else {
-            return;
-        }
+        // Adjust delta pitch arrays to match new durations
+        adjustDeltaPitchForNewDuration(*leftNote, currentLeftDuration);
+        adjustDeltaPitchForNewDuration(*rightNote, currentRightDuration);
         
-        // CRITICAL: Rebuild basePitch and deltaPitch (EXACT same as NoteMergeAction)
-        rebuildPitchData();
+        // Mark notes as dirty
+        leftNote->markDirty();
+        rightNote->markDirty();
+        
+        // Mark notes as synth dirty to ensure proper updates
+        leftNote->markSynthDirty();
+        rightNote->markSynthDirty();
         
         if (onChanged)
             onChanged();
@@ -111,38 +103,26 @@ public:
 
     void redo() override
     {
-        if (!project) return;
+        if (!leftNote || !rightNote) return;
         
-        // Remove the original notes by finding them via startFrame (same as NoteMergeAction)
-        auto& notes = project->getNotes();
+        // Apply changed states
+        leftNote->setStartFrame(changedLeftNote.getStartFrame());
+        leftNote->setEndFrame(changedLeftNote.getEndFrame());
+        leftNote->setSrcStartFrame(changedLeftNote.getSrcStartFrame());
+        leftNote->setSrcEndFrame(changedLeftNote.getSrcEndFrame());
         
-        bool leftRemoved = false;
-        bool rightRemoved = false;
+        rightNote->setStartFrame(changedRightNote.getStartFrame());
+        rightNote->setEndFrame(changedRightNote.getEndFrame());
+        rightNote->setSrcStartFrame(changedRightNote.getSrcStartFrame());
+        rightNote->setSrcEndFrame(changedRightNote.getSrcEndFrame());
         
-        for (auto it = notes.begin(); it != notes.end(); ) {
-            if (!leftRemoved && it->getStartFrame() == originalLeftNote.getStartFrame()) {
-                it = notes.erase(it);
-                leftRemoved = true;
-            } else if (!rightRemoved && it->getStartFrame() == originalRightNote.getStartFrame()) {
-                it = notes.erase(it);
-                rightRemoved = true;
-            } else {
-                ++it;
-            }
-            
-            if (leftRemoved && rightRemoved) break;
-        }
+        // Mark notes as dirty
+        leftNote->markDirty();
+        rightNote->markDirty();
         
-        // Only add adjusted notes if both original notes were successfully removed
-        if (leftRemoved && rightRemoved) {
-            project->addNote(adjustedLeftNote);
-            project->addNote(adjustedRightNote);
-        } else {
-            return;
-        }
-        
-        // CRITICAL: Rebuild basePitch and deltaPitch (EXACT same as NoteMergeAction)
-        rebuildPitchData();
+        // Mark notes as synth dirty to ensure proper updates
+        leftNote->markSynthDirty();
+        rightNote->markSynthDirty();
         
         if (onChanged)
             onChanged();
@@ -151,86 +131,59 @@ public:
     juce::String getName() const override { return "Adjust Note Boundary"; }
 
 private:
-    void rebuildPitchData() {
-        if (!project) return;
+    void adjustDeltaPitchForNewDuration(Note& note, int oldDuration) {
+        std::vector<float> oldDelta = note.getDeltaPitch();
+        int newDuration = note.getEndFrame() - note.getStartFrame();
         
-        auto& audioData = project->getAudioData();
-        const int totalFrames = audioData.getNumFrames();
-        
-        // Step 1: Build note segments for base pitch generation
-        std::vector<BasePitchCurve::NoteSegment> segments;
-        const auto& notes = project->getNotes();
-        segments.reserve(notes.size());
-        for (const auto& n : notes) {
-            if (n.isRest()) continue;
-            
-            BasePitchCurve::NoteSegment seg;
-            seg.startFrame = n.getStartFrame();
-            seg.endFrame = n.getEndFrame();
-            seg.midiNote = n.getMidiNote() + n.getPitchOffset()
-                         - (n.getTiltLeft() + n.getTiltRight()) / 2.0f;
-            segments.push_back(seg);
+        if (oldDuration <= 0 || newDuration <= 0) {
+            // If invalid duration, clear delta pitch
+            note.setDeltaPitch(std::vector<float>());
+            return;
         }
         
-        std::sort(segments.begin(), segments.end(),
-                  [](const auto& a, const auto& b) { return a.startFrame < b.startFrame; });
-        
-        // Step 2: Regenerate basePitch from notes
-        if (!segments.empty()) {
-            audioData.basePitch = BasePitchCurve::generateForNotes(segments, totalFrames);
+        if (oldDuration == newDuration) {
+            // No change in duration, no adjustment needed
+            return;
         }
         
-        // Step 3: Recalculate deltaPitch from f0 and new basePitch (EXACT same as NoteMergeAction)
-        audioData.deltaPitch.resize(static_cast<size_t>(totalFrames));
-        for (int i = 0; i < totalFrames; ++i) {
-            const float baseMidi = audioData.basePitch[static_cast<size_t>(i)];
-            if (i < static_cast<int>(audioData.voicedMask.size()) && 
-                audioData.voicedMask[static_cast<size_t>(i)] && 
-                audioData.f0[static_cast<size_t>(i)] > 0.0f) {
-                const float f0Midi = freqToMidi(audioData.f0[static_cast<size_t>(i)]);
-                audioData.deltaPitch[static_cast<size_t>(i)] = f0Midi - baseMidi;
-            } else {
-                audioData.deltaPitch[static_cast<size_t>(i)] = 0.0f;
-            }
-        }
+        std::vector<float> newDelta;
+        newDelta.reserve(newDuration);
         
-        // Step 4: Update cached baseF0
-        audioData.baseF0.resize(static_cast<size_t>(totalFrames));
-        for (int i = 0; i < totalFrames; ++i) {
-            audioData.baseF0[static_cast<size_t>(i)] = midiToFreq(audioData.basePitch[static_cast<size_t>(i)]);
-        }
-        
-        // Step 5: Sync global deltaPitch back to each note's deltaPitch vectors
-        for (auto& n : project->getNotes()) {
-            if (n.isRest()) continue;
-            
-            const int startFrame = n.getStartFrame();
-            const int endFrame = n.getEndFrame();
-            const int numFrames = endFrame - startFrame;
-            
-            if (numFrames <= 0) continue;
-            
-            std::vector<float> noteDelta(static_cast<size_t>(numFrames));
-            for (int i = 0; i < numFrames; ++i) {
-                const int globalIdx = startFrame + i;
-                if (globalIdx >= 0 && globalIdx < totalFrames) {
-                    noteDelta[static_cast<size_t>(i)] = audioData.deltaPitch[static_cast<size_t>(globalIdx)];
+        if (oldDelta.empty()) {
+            // If no old delta, initialize with zeros
+            newDelta.assign(newDuration, 0.0f);
+        } else {
+            // Resample the delta pitch to match new duration
+            for (int i = 0; i < newDuration; ++i) {
+                float ratio = static_cast<float>(i) / static_cast<float>(newDuration);
+                float oldIndex = ratio * oldDuration;
+                
+                // Bilinear interpolation
+                int idx1 = static_cast<int>(oldIndex);
+                int idx2 = std::min(idx1 + 1, oldDuration - 1);
+                float frac = oldIndex - idx1;
+                
+                if (idx1 >= 0 && idx1 < static_cast<int>(oldDelta.size())) {
+                    float val1 = (idx1 < static_cast<int>(oldDelta.size())) ? oldDelta[idx1] : 0.0f;
+                    float val2 = (idx2 < static_cast<int>(oldDelta.size())) ? oldDelta[idx2] : 0.0f;
+                    
+                    float interpolated = val1 * (1.0f - frac) + val2 * frac;
+                    newDelta.push_back(interpolated);
+                } else {
+                    newDelta.push_back(0.0f);
                 }
             }
-            
-            n.setOriginalDeltaPitch(noteDelta);
-            n.setDeltaPitch(noteDelta);
         }
         
-        // CRITICAL: Recompose F0 from basePitch and deltaPitch
-        PitchCurveProcessor::composeF0InPlace(*project, /*applyUvMask=*/true);
+        note.setDeltaPitch(std::move(newDelta));
     }
-    
-    Project* project;
+
+    Note *leftNote;
+    Note *rightNote;
     Note originalLeftNote;
     Note originalRightNote;
-    Note adjustedLeftNote;
-    Note adjustedRightNote;
+    Note changedLeftNote;
+    Note changedRightNote;
     std::function<void()> onChanged;
 };
 
@@ -751,7 +704,7 @@ public:
             
             // CRITICAL: Recompose F0 from basePitch and deltaPitch
             // This ensures f0 array is synchronized with the rebuilt data
-            PitchCurveProcessor::composeF0InPlace(*project, /*applyUvMask=*/true);
+            PitchCurveProcessor::composeF0InPlace(*project, /*applyUvMask=*/false);
         }
         
         if (onChanged)

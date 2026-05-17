@@ -1,6 +1,7 @@
 #pragma once
 
 #include "InteractionHandler.h"
+#include <vector>
 
 class Note;
 class NoteSplitter;
@@ -15,6 +16,10 @@ public:
 
   bool mouseDown(const juce::MouseEvent &e, float worldX,
                  float worldY) override;
+  bool mouseDrag(const juce::MouseEvent &e, float worldX,
+                 float worldY) override;
+  bool mouseUp(const juce::MouseEvent &e, float worldX,
+               float worldY) override;
   void mouseMove(const juce::MouseEvent &e, float worldX,
                  float worldY) override;
   void mouseDoubleClick(const juce::MouseEvent &e, float worldX,
@@ -35,6 +40,11 @@ public:
   void clearGuide();
 
 private:
+  void adjustBoundaryData(Note& leftNote, Note& rightNote, int oldBoundaryFrame, int newBoundaryFrame);
+  void adjustOriginalDeltaPitch(Note& leftNote, Note& rightNote, int oldBoundaryFrame, int newBoundaryFrame);
+  void adjustClipWaveform(Note& leftNote, Note& rightNote, int frameDelta);
+  void adjustF0Values(Note& leftNote, Note& rightNote, int frameDelta);
+
   float splitGuideX = -1.0f;
   Note *splitGuideNote = nullptr;
   
@@ -45,4 +55,24 @@ private:
   int boundaryRightStartFrame = -1;  // ← 右音符起始帧
   int boundaryRightEndFrame = -1;    // ← 右音符结束帧
   bool isNearBoundary_ = false;
+  
+  // Boundary dragging state
+  bool isDraggingBoundary = false;
+  float dragBoundaryX = -1.0f;
+  int dragInitialFrame = -1;
+  int dragMinFrame = -1;
+  int dragMaxFrame = -1;
+  float dragMinX = -1.0f;
+  float dragMaxX = -1.0f;
+  Note* dragLeftNote = nullptr;
+  Note* dragRightNote = nullptr;
+  int originalLeftEndFrame = -1;
+  int originalRightStartFrame = -1;
+  
+public:
+  // Accessors for boundary dragging state
+  bool getIsDraggingBoundary() const { return isDraggingBoundary; }
+  float getDragBoundaryX() const { return dragBoundaryX; }
+  Note* getDragLeftNote() const { return dragLeftNote; }
+  Note* getDragRightNote() const { return dragRightNote; }
 };

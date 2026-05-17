@@ -1545,12 +1545,27 @@ void PianoRollComponent::drawNotes(juce::Graphics &g, NoteRenderPass pass)
   }
 
   // Draw boundary merge highlight when near note boundary in split mode
-  if (drawOverlays && editMode == EditMode::Split && splitHandler_ &&
-      splitHandler_->isNearBoundary())
+  if (drawOverlays && editMode == EditMode::Split && splitHandler_)
   {
-    float boundaryX = splitHandler_->getBoundaryHighlightX();
-    Note* leftNote = splitHandler_->getBoundaryLeftNote();
-    Note* rightNote = splitHandler_->getBoundaryRightNote();
+    float boundaryX = -1.0f;
+    Note* leftNote = nullptr;
+    Note* rightNote = nullptr;
+    
+    // Check if we're dragging a boundary or just hovering near one
+    if (splitHandler_->getIsDraggingBoundary())
+    {
+      // During drag, use the current drag position
+      boundaryX = splitHandler_->getDragBoundaryX();
+      leftNote = splitHandler_->getDragLeftNote();
+      rightNote = splitHandler_->getDragRightNote();
+    }
+    else if (splitHandler_->isNearBoundary())
+    {
+      // When hovering, use the highlight position
+      boundaryX = splitHandler_->getBoundaryHighlightX();
+      leftNote = splitHandler_->getBoundaryLeftNote();
+      rightNote = splitHandler_->getBoundaryRightNote();
+    }
     
     if (boundaryX >= 0 && leftNote && rightNote)
     {
@@ -1576,7 +1591,6 @@ void PianoRollComponent::drawNotes(juce::Graphics &g, NoteRenderPass pass)
       g.drawLine(boundaryX - 1, topY, boundaryX - 1, bottomY, 1.0f);
       g.drawLine(boundaryX + 1, topY, boundaryX + 1, bottomY, 1.0f);
       
-      // Draw merge icon (two arrows pointing at each other)
       // Draw merge icon (two arrows pointing at each other)
       const float arrowSize = 6.0f;
       const float centerY = (topY + bottomY) / 2.0f;
