@@ -207,11 +207,79 @@ bool SplitHandler::mouseUp(const juce::MouseEvent &e, float worldX,
         }
       }
       
-      // CRITICAL: Rebuild basePitch and deltaPitch immediately after applying changes (same as NoteMerge)
-      // This ensures audioData arrays are consistent with the new note boundaries
+      // CRITICAL: After boundary adjustment, adjust midiNote to match average F0
+      // This ensures deltaPitch is centered around zero (same as NoteSplitter)
       auto& audioData = owner_.project->getAudioData();
       const int totalFrames = audioData.getNumFrames();
       
+      // Calculate average F0 MIDI value for each adjusted note segment
+      // For left note (adjusted)
+      {
+        const int startFrame = adjustedLeftNote.getStartFrame();
+        const int endFrame = adjustedLeftNote.getEndFrame();
+        
+        if (!audioData.f0.empty() && endFrame > startFrame) {
+          float sumF0Midi = 0.0f;
+          int validCount = 0;
+          
+          for (int i = startFrame; i < endFrame && i < static_cast<int>(audioData.f0.size()); ++i) {
+            if (i < static_cast<int>(audioData.voicedMask.size()) && 
+                audioData.voicedMask[static_cast<size_t>(i)] && 
+                audioData.f0[static_cast<size_t>(i)] > 0.0f) {
+              sumF0Midi += freqToMidi(audioData.f0[static_cast<size_t>(i)]);
+              validCount++;
+            }
+          }
+          
+          if (validCount > 0) {
+            const float avgF0Midi = sumF0Midi / static_cast<float>(validCount);
+            
+            // Update the note in project
+            for (auto& n : owner_.project->getNotes()) {
+              if (n.getStartFrame() == startFrame && n.getEndFrame() == endFrame) {
+                n.setMidiNote(avgF0Midi);
+                n.setPitchOffset(0.0f);
+                break;
+              }
+            }
+          }
+        }
+      }
+      
+      // For right note (adjusted)
+      {
+        const int startFrame = adjustedRightNote.getStartFrame();
+        const int endFrame = adjustedRightNote.getEndFrame();
+        
+        if (!audioData.f0.empty() && endFrame > startFrame) {
+          float sumF0Midi = 0.0f;
+          int validCount = 0;
+          
+          for (int i = startFrame; i < endFrame && i < static_cast<int>(audioData.f0.size()); ++i) {
+            if (i < static_cast<int>(audioData.voicedMask.size()) && 
+                audioData.voicedMask[static_cast<size_t>(i)] && 
+                audioData.f0[static_cast<size_t>(i)] > 0.0f) {
+              sumF0Midi += freqToMidi(audioData.f0[static_cast<size_t>(i)]);
+              validCount++;
+            }
+          }
+          
+          if (validCount > 0) {
+            const float avgF0Midi = sumF0Midi / static_cast<float>(validCount);
+            
+            // Update the note in project
+            for (auto& n : owner_.project->getNotes()) {
+              if (n.getStartFrame() == startFrame && n.getEndFrame() == endFrame) {
+                n.setMidiNote(avgF0Midi);
+                n.setPitchOffset(0.0f);
+                break;
+              }
+            }
+          }
+        }
+      }
+      
+      // Now rebuild basePitch and deltaPitch with the updated midiNote values
       // Step 1: Build note segments for base pitch generation
       std::vector<BasePitchCurve::NoteSegment> segments;
       const auto& notes = owner_.project->getNotes();

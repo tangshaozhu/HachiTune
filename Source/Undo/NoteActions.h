@@ -157,6 +157,36 @@ private:
         auto& audioData = project->getAudioData();
         const int totalFrames = audioData.getNumFrames();
         
+        // CRITICAL: Adjust midiNote to match average F0 for affected notes (same as boundary adjustment in SplitHandler)
+        // This ensures deltaPitch is centered around zero after undo/redo
+        // We need to process ALL notes that are currently in the project (after undo/redo has restored them)
+        for (auto& n : project->getNotes()) {
+            if (n.isRest()) continue;
+            
+            const int startFrame = n.getStartFrame();
+            const int endFrame = n.getEndFrame();
+            
+            if (!audioData.f0.empty() && endFrame > startFrame) {
+                float sumF0Midi = 0.0f;
+                int validCount = 0;
+                
+                for (int i = startFrame; i < endFrame && i < static_cast<int>(audioData.f0.size()); ++i) {
+                    if (i < static_cast<int>(audioData.voicedMask.size()) && 
+                        audioData.voicedMask[static_cast<size_t>(i)] && 
+                        audioData.f0[static_cast<size_t>(i)] > 0.0f) {
+                        sumF0Midi += freqToMidi(audioData.f0[static_cast<size_t>(i)]);
+                        validCount++;
+                    }
+                }
+                
+                if (validCount > 0) {
+                    const float avgF0Midi = sumF0Midi / static_cast<float>(validCount);
+                    n.setMidiNote(avgF0Midi);
+                    n.setPitchOffset(0.0f);
+                }
+            }
+        }
+        
         // Step 1: Build note segments for base pitch generation
         std::vector<BasePitchCurve::NoteSegment> segments;
         const auto& notes = project->getNotes();
