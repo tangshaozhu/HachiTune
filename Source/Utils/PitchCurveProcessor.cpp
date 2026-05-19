@@ -301,6 +301,8 @@ namespace PitchCurveProcessor
                 note.getTiltRight(),
                 note.getVarianceScale(),
                 note.getHighPassCutoff(),
+                note.getBezierTiltLeft(),
+                note.getBezierTiltRight(),
                 context
             );
 
@@ -393,6 +395,8 @@ namespace PitchCurveProcessor
                 note.getTiltRight(),
                 note.getVarianceScale(),
                 note.getHighPassCutoff(),
+                note.getBezierTiltLeft(),
+                note.getBezierTiltRight(),
                 context
             );
 
@@ -449,6 +453,8 @@ namespace PitchCurveProcessor
                 note.getTiltRight(),
                 note.getVarianceScale(),
                 note.getHighPassCutoff(),
+                note.getBezierTiltLeft(),
+                note.getBezierTiltRight(),
                 context
             );
 

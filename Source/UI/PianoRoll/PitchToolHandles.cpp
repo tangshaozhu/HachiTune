@@ -55,19 +55,26 @@ void PitchToolHandles::updateHandles(const std::vector<Note*>& selectedNotes,
   float centerX = (leftX + rightX) * 0.5f;
   float centerY = (topY + bottomY) * 0.5f;
 
-  // Add Handles - Modified to place tilt anchors above the note for better UX
-  // Vertical position aligned with Reduce Variance handle (top edge)
+  // Add Handles - Two sets of tilt controls:
+  // 1. Linear tilt (cyan, at center height) - controls overall slope
+  // 2. Bezier curve (magenta, at top) - controls curvature shape
   
-  // 1. Tilt Left: Left edge, aligned with top of note box
-  addHandle(HandleType::TiltLeft, leftX, topY);
+  // Linear Tilt Left: Left edge, vertically centered
+  addHandle(HandleType::TiltLeft, leftX, centerY);
 
-  // 2. Tilt Right: Right edge, aligned with top of note box
-  addHandle(HandleType::TiltRight, rightX, topY);
+  // Linear Tilt Right: Right edge, vertically centered
+  addHandle(HandleType::TiltRight, rightX, centerY);
 
-  // 3. Reduce Variance: Top edge, horizontally centered
+  // Bezier Curve Left: Left edge, aligned with top of note box
+  addHandle(HandleType::BezierTiltLeft, leftX, topY);
+
+  // Bezier Curve Right: Right edge, aligned with top of note box
+  addHandle(HandleType::BezierTiltRight, rightX, topY);
+
+  // Reduce Variance: Top edge, horizontally centered
   addHandle(HandleType::ReduceVariance, centerX, topY);
   
-  // 4. High Pass Flatten: Bottom-Right corner (右下角)
+  // High Pass Flatten: Bottom-Right corner (右下角)
   addHandle(HandleType::HighPassFlatten, rightX, bottomY);
 }
 
@@ -117,10 +124,14 @@ void PitchToolHandles::addHandle(HandleType type, float worldX, float worldY, No
 
 juce::Colour PitchToolHandles::getColorForType(PitchToolHandles::HandleType type) const {
   switch (type) {
-    case HandleType::TiltLeft:
+    case HandleType::TiltLeft:        // 线性倾斜左侧 - 青色
       return juce::Colours::cyan;
-    case HandleType::TiltRight:
+    case HandleType::TiltRight:       // 线性倾斜右侧 - 青色
       return juce::Colours::cyan;
+    case HandleType::BezierTiltLeft:  // 贝塞尔曲线左侧 - 洋红色
+      return juce::Colours::magenta;
+    case HandleType::BezierTiltRight: // 贝塞尔曲线右侧 - 洋红色
+      return juce::Colours::magenta;
     case HandleType::ReduceVariance:
       return juce::Colours::yellow;
     case HandleType::HighPassFlatten:  // 高通滤波手柄颜色

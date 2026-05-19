@@ -11,8 +11,10 @@
 class PitchToolHandles {
 public:
   enum class HandleType {
-    TiltLeft,
-    TiltRight,
+    TiltLeft,        // 线性倾斜左侧控制点（青色）
+    TiltRight,       // 线性倾斜右侧控制点（青色）
+    BezierTiltLeft,  // 贝塞尔曲线左侧控制点（洋红色）
+    BezierTiltRight, // 贝塞尔曲线右侧控制点（洋红色）
     ReduceVariance,
     HighPassFlatten,  // 高通滤波手柄
     None

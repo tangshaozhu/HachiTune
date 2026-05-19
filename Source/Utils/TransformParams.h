@@ -10,6 +10,8 @@ struct TransformParams
 {
     float tiltLeft = 0.0f;
     float tiltRight = 0.0f;
+    float bezierTiltLeft = 0.0f;     // Bezier curve left control point offset
+    float bezierTiltRight = 0.0f;    // Bezier curve right control point offset
     float varianceScale = 1.0f;
     float highPassCutoff = 0.0f;
     float midiNote = 0.0f;
@@ -24,6 +26,8 @@ struct TransformParams
         TransformParams p;
         p.tiltLeft = note.getTiltLeft();
         p.tiltRight = note.getTiltRight();
+        p.bezierTiltLeft = note.getBezierTiltLeft();
+        p.bezierTiltRight = note.getBezierTiltRight();
         p.varianceScale = note.getVarianceScale();
         p.highPassCutoff = note.getHighPassCutoff();
         p.midiNote = note.getMidiNote();
@@ -38,6 +42,8 @@ struct TransformParams
         note.setMidiNote(midiNote);
         note.setTiltLeft(tiltLeft);
         note.setTiltRight(tiltRight);
+        note.setBezierTiltLeft(bezierTiltLeft);
+        note.setBezierTiltRight(bezierTiltRight);
         note.setVarianceScale(varianceScale);
         note.setHighPassCutoff(highPassCutoff);
         note.setDeltaScale(deltaScale);
@@ -48,6 +54,8 @@ struct TransformParams
     {
         return tiltLeft == other.tiltLeft &&
                tiltRight == other.tiltRight &&
+               bezierTiltLeft == other.bezierTiltLeft &&
+               bezierTiltRight == other.bezierTiltRight &&
                varianceScale == other.varianceScale &&
                midiNote == other.midiNote &&
                deltaScale == other.deltaScale &&
@@ -63,6 +71,8 @@ struct TransformParams
     {
         return tiltLeft == 0.0f &&
                tiltRight == 0.0f &&
+               bezierTiltLeft == 0.0f &&
+               bezierTiltRight == 0.0f &&
                varianceScale == 1.0f &&
                deltaScale == 1.0f &&
                deltaOffset == 0.0f;

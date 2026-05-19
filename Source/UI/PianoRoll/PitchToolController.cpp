@@ -152,23 +152,46 @@ void PitchToolController::applyOperation(std::vector<Note*>& notes,
     {
       case PitchToolHandles::HandleType::TiltLeft:
       {
-        // Drag UP = positive semitoneDelta = left edge goes UP
+        // Linear tilt left control - modifies linear tilt parameter
         const float amount = semitoneDelta;
         note->setTiltLeft(origParams.tiltLeft + amount);
         
-        // Calculate tilt mean shift
-        const float newTiltMean = (note->getTiltLeft() + note->getTiltRight()) / 2.0f;
-        note->setMidiNote(origParams.midiNote + newTiltMean);
+        // Calculate total tilt mean shift (linear only for MIDI compensation)
+        const float linearTiltMean = (note->getTiltLeft() + note->getTiltRight()) / 2.0f;
+        note->setMidiNote(origParams.midiNote + linearTiltMean);
         break;
       }
       case PitchToolHandles::HandleType::TiltRight:
       {
+        // Linear tilt right control - modifies linear tilt parameter
         const float amount = semitoneDelta;
         note->setTiltRight(origParams.tiltRight + amount);
         
-        // Calculate tilt mean shift
-        const float newTiltMean = (note->getTiltLeft() + note->getTiltRight()) / 2.0f;
-        note->setMidiNote(origParams.midiNote + newTiltMean);
+        // Calculate total tilt mean shift (linear only for MIDI compensation)
+        const float linearTiltMean = (note->getTiltLeft() + note->getTiltRight()) / 2.0f;
+        note->setMidiNote(origParams.midiNote + linearTiltMean);
+        break;
+      }
+      case PitchToolHandles::HandleType::BezierTiltLeft:
+      {
+        // Bezier curve left control - modifies bezier curvature parameter
+        const float amount = semitoneDelta;
+        note->setBezierTiltLeft(origParams.bezierTiltLeft + amount);
+        
+        // Bezier curve doesn't affect MIDI note offset (symmetric around zero)
+        const float linearTiltMean = (note->getTiltLeft() + note->getTiltRight()) / 2.0f;
+        note->setMidiNote(origParams.midiNote + linearTiltMean);
+        break;
+      }
+      case PitchToolHandles::HandleType::BezierTiltRight:
+      {
+        // Bezier curve right control - modifies bezier curvature parameter
+        const float amount = semitoneDelta;
+        note->setBezierTiltRight(origParams.bezierTiltRight + amount);
+        
+        // Bezier curve doesn't affect MIDI note offset (symmetric around zero)
+        const float linearTiltMean = (note->getTiltLeft() + note->getTiltRight()) / 2.0f;
+        note->setMidiNote(origParams.midiNote + linearTiltMean);
         break;
       }
       case PitchToolHandles::HandleType::ReduceVariance:

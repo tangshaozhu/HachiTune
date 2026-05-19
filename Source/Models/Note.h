@@ -82,6 +82,10 @@ public:
     void setTiltLeft(float tilt) { tiltLeft = tilt; }
     float getTiltRight() const { return tiltRight; }
     void setTiltRight(float tilt) { tiltRight = tilt; }
+    float getBezierTiltLeft() const { return bezierTiltLeft; }
+    void setBezierTiltLeft(float tilt) { bezierTiltLeft = tilt; }
+    float getBezierTiltRight() const { return bezierTiltRight; }
+    void setBezierTiltRight(float tilt) { bezierTiltRight = tilt; }
     float getVarianceScale() const { return varianceScale; }
     void setVarianceScale(float scale) { varianceScale = scale; }
     float getHighPassCutoff() const { return highPassCutoff; }
@@ -191,8 +195,10 @@ private:
     std::vector<float> originalDeltaPitch;  // Pristine curve from analysis (never modified)
 
     // Pitch tool transformation parameters (non-destructive, stored as parameters)
-    float tiltLeft = 0.0f;           // Tilt amount at left edge (semitones)
-    float tiltRight = 0.0f;          // Tilt amount at right edge (semitones)
+    float tiltLeft = 0.0f;           // Linear tilt amount at left edge (semitones)
+    float tiltRight = 0.0f;          // Linear tilt amount at right edge (semitones)
+    float bezierTiltLeft = 0.0f;     // Bezier curve left control point offset (semitones)
+    float bezierTiltRight = 0.0f;    // Bezier curve right control point offset (semitones)
     float varianceScale = 1.0f;      // Variance scaling factor (1.0=unchanged, 0.0=flat, >1.0=amplify, <0.0=invert)
     float highPassCutoff = 0.0f;     // High-pass filter cutoff ratio for flattening (0.0=no effect, 1.0=fully flat)
 

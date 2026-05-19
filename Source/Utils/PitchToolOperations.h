@@ -84,15 +84,18 @@ struct AdjacentNoteContext
  * Applies all transformation parameters non-destructively.
  * 
  * This function chains multiple transformations in order:
- * 1. Variance scaling
- * 2. Tilt (left and right combined)
- * 3. High-pass flattening
+ * 1. Linear tilt (using tiltLeft/tiltRight as independent linear slopes)
+ * 2. Bezier curve tilt (using bezierTiltLeft/bezierTiltRight for curvature)
+ * 3. Variance scaling
+ * 4. High-pass flattening
  * 
  * @param originalDelta The pristine deltaPitch curve from analysis (never modified)
- * @param tiltLeft Tilt amount at left edge in semitones
- * @param tiltRight Tilt amount at right edge in semitones
+ * @param tiltLeft Linear tilt amount at left edge (creates slope from left to right)
+ * @param tiltRight Linear tilt amount at right edge (creates slope from right to left)
  * @param varianceScale Variance scaling factor (1.0=unchanged, 0.0=flat, >1.0=amplify, <0.0=invert)
  * @param highPassCutoff High-pass filter cutoff ratio (0.0=no effect, 1.0=fully flat)
+ * @param bezierTiltLeft Bezier curve left control point offset (for curvature)
+ * @param bezierTiltRight Bezier curve right control point offset (for curvature)
  * @param adjacentContext Context for adjacent notes
  * @return Transformed deltaPitch curve
  */
@@ -101,6 +104,8 @@ std::vector<float> applyAllTransformations(const std::vector<float>& originalDel
                                            float tiltRight,
                                            float varianceScale,
                                            float highPassCutoff = 0.0f,
+                                           float bezierTiltLeft = 0.0f,
+                                           float bezierTiltRight = 0.0f,
                                            const AdjacentNoteContext& adjacentContext = {});
 
 /**

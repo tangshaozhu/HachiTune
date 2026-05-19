@@ -246,6 +246,8 @@ std::vector<float> applyAllTransformations(const std::vector<float>& originalDel
                                            float tiltRight,
                                            float varianceScale,
                                            float highPassCutoff,
+                                           float bezierTiltLeft,
+                                           float bezierTiltRight,
                                            const AdjacentNoteContext& /*adjacentContext*/) {
   if (originalDelta.empty()) {
     return {};
@@ -254,19 +256,29 @@ std::vector<float> applyAllTransformations(const std::vector<float>& originalDel
   // Start with the original pristine curve
   std::vector<float> result = originalDelta;
 
-  // 1. Apply cubic Bezier tilt transformation (replaces linear tilt)
-  // Using splineTiltDeltaPitch for smooth C1-continuous curves that prevent pitch discontinuities
-  // Control points: P0=(0,0), P1=(0,tiltLeft), P2=(1,tiltRight), P3=(1,0)
-  if (std::abs(tiltLeft) > 0.001f || std::abs(tiltRight) > 0.001f) {
-    result = splineTiltDeltaPitch(result, tiltLeft, tiltRight);
+  // 1. Apply linear tilt transformations (independent control)
+  // TiltLeft: pivot at right edge (1.0), creates slope from left to right
+  if (std::abs(tiltLeft) > 0.001f) {
+    result = tiltDeltaPitch(result, 1.0f, -tiltLeft);
+  }
+  
+  // TiltRight: pivot at left edge (0.0), creates slope from right to left
+  if (std::abs(tiltRight) > 0.001f) {
+    result = tiltDeltaPitch(result, 0.0f, tiltRight);
+  }
+  
+  // 2. Apply Bezier curve tilt for smooth curvature (separate parameters)
+  // Control points: P0=(0,0), P1=(0,bezierTiltLeft), P2=(1,bezierTiltRight), P3=(1,0)
+  if (std::abs(bezierTiltLeft) > 0.001f || std::abs(bezierTiltRight) > 0.001f) {
+    result = splineTiltDeltaPitch(result, bezierTiltLeft, bezierTiltRight);
   }
 
-  // 2. Apply variance scaling
+  // 3. Apply variance scaling
   if (std::abs(varianceScale - 1.0f) > 0.001f) {
     result = reduceVariance(result, varianceScale);
   }
 
-  // 3. Apply high-pass flattening if needed
+  // 4. Apply high-pass flattening if needed
   if (std::abs(highPassCutoff) > 0.001f) {
     result = highPassFlatten(result, highPassCutoff);
   }
