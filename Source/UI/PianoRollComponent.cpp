@@ -1218,21 +1218,197 @@ void PianoRollComponent::drawNotes(juce::Graphics &g, NoteRenderPass pass)
       int startSample = 0;
       int endSample = 0;
       const auto &clipWaveform = note.getClipWaveform();
+      
+      // Debug: Track rendering entry during split drag
+      static int renderEntryCount = 0;
+      if (splitHandler_->getIsDraggingBoundary() && renderEntryCount < 20) {
+        DBG("RENDER_ENTRY #" << renderEntryCount++ 
+            << ": noteFrames=" << note.getStartFrame() << "-" << note.getEndFrame()
+            << ", hasClip=" << (!clipWaveform.empty() ? "true" : "false")
+            << ", clipSize=" << clipWaveform.size()
+            << ", hasGlobal=" << (globalSamples ? "true" : "false"));
+      }
+      
       if (!clipWaveform.empty())
       {
-        samples = clipWaveform.data();
-        totalSamples = static_cast<int>(clipWaveform.size());
-        startSample = 0;
-        endSample = totalSamples;
+        // During SplitHandler drag, create merged buffer and split by boundary
+        bool isSplitDragging = splitHandler_->getIsDraggingBoundary();
+        Note* dragLeftNote = isSplitDragging ? splitHandler_->getDragLeftNote() : nullptr;
+        Note* dragRightNote = isSplitDragging ? splitHandler_->getDragRightNote() : nullptr;
+        float dragBoundaryX = isSplitDragging ? splitHandler_->getDragBoundaryX() : -1.0f;
+        
+        // Use frame range matching instead of pointer comparison (pointers may become invalid after note modifications)
+        bool isDragLeftNote = false;
+        bool isDragRightNote = false;
+        
+        if (isSplitDragging && dragLeftNote && dragRightNote) {
+          // Match by frame range, not pointer
+          isDragLeftNote = (note.getStartFrame() == dragLeftNote->getStartFrame() && 
+                           note.getEndFrame() == dragLeftNote->getEndFrame());
+          isDragRightNote = (note.getStartFrame() == dragRightNote->getStartFrame() && 
+                            note.getEndFrame() == dragRightNote->getEndFrame());
+          
+          // Debug: Track match attempts during split drag
+          static int matchCheckCount = 0;
+          if (matchCheckCount < 20 && (note.getStartFrame() >= 230 && note.getStartFrame() <= 280)) {
+            DBG("MATCH_CHECK #" << matchCheckCount++ 
+                << ": note=" << note.getStartFrame() << "-" << note.getEndFrame()
+                << ", left=" << dragLeftNote->getStartFrame() << "-" << dragLeftNote->getEndFrame()
+                << ", right=" << dragRightNote->getStartFrame() << "-" << dragRightNote->getEndFrame()
+                << ", isLeft=" << (isDragLeftNote ? "true" : "false")
+                << ", isRight=" << (isDragRightNote ? "true" : "false"));
+          }
+        }
+        
+        if (isSplitDragging && dragBoundaryX >= 0.0f && (isDragLeftNote || isDragRightNote)) {
+          // Get the original left and right note waveforms from splitHandler
+          const auto& leftClip = dragLeftNote->getClipWaveform();
+          const auto& rightClip = dragRightNote->getClipWaveform();
+          
+          if (!leftClip.empty() && !rightClip.empty()) {
+            // Create complete merged buffer: leftClip + rightClip
+            static std::vector<float> tempMergedBuffer;
+            tempMergedBuffer.clear();
+            tempMergedBuffer.reserve(leftClip.size() + rightClip.size());
+            tempMergedBuffer.insert(tempMergedBuffer.end(), leftClip.begin(), leftClip.end());
+            tempMergedBuffer.insert(tempMergedBuffer.end(), rightClip.begin(), rightClip.end());
+            
+            // Calculate boundary position in merged buffer (use float for smooth interpolation)
+            double time = dragBoundaryX / pixelsPerSecond;
+            double tempBoundaryFrame = time * audioData.sampleRate / HOP_SIZE;
+            
+            int leftOriginalStartFrame = dragLeftNote->getStartFrame();
+            double frameOffset = tempBoundaryFrame - leftOriginalStartFrame;
+            double sampleOffsetDouble = frameOffset * HOP_SIZE;
+            int sampleOffset = std::max(0, std::min(static_cast<int>(sampleOffsetDouble), static_cast<int>(tempMergedBuffer.size())));
+            
+            if (isDragLeftNote) {
+              // Left note: show from 0 to sampleOffset in merged buffer
+              samples = tempMergedBuffer.data();
+              totalSamples = sampleOffset;
+              startSample = 0;
+              endSample = totalSamples;
+              
+              // Adjust w to match the displayed sample range (use float calculation for smoothness)
+              double leftFrameCount = sampleOffsetDouble / HOP_SIZE;
+              w = static_cast<float>(leftFrameCount * (pixelsPerSecond / (audioData.sampleRate / HOP_SIZE)));
+            } else {
+              // Right note: show from sampleOffset to end in merged buffer
+              samples = tempMergedBuffer.data();
+              totalSamples = static_cast<int>(tempMergedBuffer.size());
+              startSample = sampleOffset;
+              endSample = totalSamples;
+              
+              // Adjust w to match the displayed sample range (use float calculation for smoothness)
+              int rightNoteSamples = totalSamples - sampleOffset;
+              double rightFrameCount = rightNoteSamples / (double)HOP_SIZE;
+              w = static_cast<float>(rightFrameCount * (pixelsPerSecond / (audioData.sampleRate / HOP_SIZE)));
+              
+              // Adjust x to start at boundary
+              x = dragBoundaryX;
+            }
+          } else {
+            samples = clipWaveform.data();
+            totalSamples = static_cast<int>(clipWaveform.size());
+            startSample = 0;
+            endSample = totalSamples;
+          }
+        } else {
+          samples = clipWaveform.data();
+          totalSamples = static_cast<int>(clipWaveform.size());
+          startSample = 0;
+          endSample = totalSamples;
+        }
       }
       else if (samples && totalSamples > 0)
       {
-        startSample = static_cast<int>(framesToSeconds(note.getStartFrame()) *
-                                       audioData.sampleRate);
-        endSample = static_cast<int>(framesToSeconds(note.getEndFrame()) *
-                                     audioData.sampleRate);
-        startSample = std::max(0, std::min(startSample, totalSamples - 1));
-        endSample = std::max(startSample + 1, std::min(endSample, totalSamples));
+        // During SplitHandler drag, create merged buffer for global waveform notes
+        bool isSplitDragging = splitHandler_->getIsDraggingBoundary();
+        Note* dragLeftNote = isSplitDragging ? splitHandler_->getDragLeftNote() : nullptr;
+        Note* dragRightNote = isSplitDragging ? splitHandler_->getDragRightNote() : nullptr;
+        float dragBoundaryX = isSplitDragging ? splitHandler_->getDragBoundaryX() : -1.0f;
+        
+        // Use frame range matching instead of pointer comparison
+        bool isDragLeftNote = false;
+        bool isDragRightNote = false;
+        
+        if (isSplitDragging && dragLeftNote && dragRightNote) {
+          isDragLeftNote = (note.getStartFrame() == dragLeftNote->getStartFrame() && 
+                           note.getEndFrame() == dragLeftNote->getEndFrame());
+          isDragRightNote = (note.getStartFrame() == dragRightNote->getStartFrame() && 
+                            note.getEndFrame() == dragRightNote->getEndFrame());
+        }
+        
+        if (isSplitDragging && dragBoundaryX >= 0.0f && (isDragLeftNote || isDragRightNote)) {
+          // Calculate sample ranges for left and right notes in global waveform
+          int leftStartSample = static_cast<int>(framesToSeconds(dragLeftNote->getStartFrame()) * audioData.sampleRate);
+          int leftEndSample = static_cast<int>(framesToSeconds(dragLeftNote->getEndFrame()) * audioData.sampleRate);
+          int rightStartSample = static_cast<int>(framesToSeconds(dragRightNote->getStartFrame()) * audioData.sampleRate);
+          int rightEndSample = static_cast<int>(framesToSeconds(dragRightNote->getEndFrame()) * audioData.sampleRate);
+          
+          leftStartSample = std::max(0, std::min(leftStartSample, totalSamples - 1));
+          leftEndSample = std::max(leftStartSample + 1, std::min(leftEndSample, totalSamples));
+          rightStartSample = std::max(0, std::min(rightStartSample, totalSamples - 1));
+          rightEndSample = std::max(rightStartSample + 1, std::min(rightEndSample, totalSamples));
+          
+          int leftNumSamples = leftEndSample - leftStartSample;
+          int rightNumSamples = rightEndSample - rightStartSample;
+          
+          // Create merged buffer from global waveform
+          static std::vector<float> tempMergedBuffer;
+          tempMergedBuffer.clear();
+          tempMergedBuffer.reserve(leftNumSamples + rightNumSamples);
+          
+          // Copy left note samples
+          for (int i = leftStartSample; i < leftEndSample; ++i) {
+            tempMergedBuffer.push_back(samples[i]);
+          }
+          // Copy right note samples
+          for (int i = rightStartSample; i < rightEndSample; ++i) {
+            tempMergedBuffer.push_back(samples[i]);
+          }
+          
+          // Calculate boundary position in merged buffer
+          double time = dragBoundaryX / pixelsPerSecond;
+          double tempBoundaryFrame = time * audioData.sampleRate / HOP_SIZE;
+          
+          int leftOriginalStartFrame = dragLeftNote->getStartFrame();
+          double frameOffset = tempBoundaryFrame - leftOriginalStartFrame;
+          double sampleOffsetDouble = frameOffset * HOP_SIZE;
+          int sampleOffset = std::max(0, std::min(static_cast<int>(sampleOffsetDouble), static_cast<int>(tempMergedBuffer.size())));
+          
+          if (isDragLeftNote) {
+            // Left note: show from 0 to sampleOffset in merged buffer
+            samples = tempMergedBuffer.data();
+            totalSamples = sampleOffset;
+            startSample = 0;
+            endSample = totalSamples;
+            
+            // Adjust w to match the displayed sample range
+            double leftFrameCount = sampleOffsetDouble / HOP_SIZE;
+            w = static_cast<float>(leftFrameCount * (pixelsPerSecond / (audioData.sampleRate / HOP_SIZE)));
+          } else {
+            // Right note: show from sampleOffset to end in merged buffer
+            samples = tempMergedBuffer.data();
+            totalSamples = static_cast<int>(tempMergedBuffer.size());
+            startSample = sampleOffset;
+            endSample = totalSamples;
+            
+            // Adjust w to match the displayed sample range
+            int rightNoteSamples = totalSamples - sampleOffset;
+            double rightFrameCount = rightNoteSamples / (double)HOP_SIZE;
+            w = static_cast<float>(rightFrameCount * (pixelsPerSecond / (audioData.sampleRate / HOP_SIZE)));
+            
+            // Adjust x to start at boundary
+            x = dragBoundaryX;
+          }
+        } else {
+          // Normal rendering for non-dragged notes
+          startSample = static_cast<int>(framesToSeconds(note.getStartFrame()) * audioData.sampleRate);
+          endSample = static_cast<int>(framesToSeconds(note.getEndFrame()) * audioData.sampleRate);
+          startSample = std::max(0, std::min(startSample, totalSamples - 1));
+          endSample = std::max(startSample + 1, std::min(endSample, totalSamples));
+        }
       }
 
       if (samples && totalSamples > 0 && w > 2.0f && endSample > startSample)
@@ -1884,7 +2060,9 @@ void PianoRollComponent::drawPitchCurves(juce::Graphics &g)
   if (showBasePitch)
   {
     const bool useLiveBasePreview =
-        (selectHandler_->isSingleNoteDragging() || pitchEditor->isDraggingMultiNotes());
+        (selectHandler_->isSingleNoteDragging() || 
+         pitchEditor->isDraggingMultiNotes() ||
+         splitHandler_->getIsDraggingBoundary());
     
     // During drag preview, we need to dynamically calculate basePitch based on current note positions
     const auto &basePitchCurve = audioData.basePitch;
@@ -1897,14 +2075,38 @@ void PianoRollComponent::drawPitchCurves(juce::Graphics &g)
       const auto &notes = project->getNotes();
       const int totalFrames = static_cast<int>(audioData.f0.size());
       
+      // Check if SplitHandler is dragging boundary - need to use temporary positions
+      bool isSplitDragging = splitHandler_->getIsDraggingBoundary();
+      Note* dragLeftNote = isSplitDragging ? splitHandler_->getDragLeftNote() : nullptr;
+      Note* dragRightNote = isSplitDragging ? splitHandler_->getDragRightNote() : nullptr;
+      float dragBoundaryX = isSplitDragging ? splitHandler_->getDragBoundaryX() : -1.0f;
+      
+      // Calculate temporary boundary frame from drag position
+      int tempBoundaryFrame = -1;
+      if (isSplitDragging && dragBoundaryX >= 0.0f) {
+        double time = dragBoundaryX / pixelsPerSecond;
+        tempBoundaryFrame = static_cast<int>(time * audioData.sampleRate / HOP_SIZE);
+      }
+      
       std::vector<BasePitchCurve::NoteSegment> segments;
       for (const auto &note : notes)
       {
         if (note.isRest()) continue;
         
         BasePitchCurve::NoteSegment seg;
-        seg.startFrame = note.getStartFrame();
-        seg.endFrame = note.getEndFrame();
+        
+        // Use temporary positions during SplitHandler drag
+        if (isSplitDragging && dragLeftNote && &note == dragLeftNote && tempBoundaryFrame > 0) {
+          seg.startFrame = note.getStartFrame();
+          seg.endFrame = tempBoundaryFrame;  // Use temporary boundary
+        } else if (isSplitDragging && dragRightNote && &note == dragRightNote && tempBoundaryFrame > 0) {
+          seg.startFrame = tempBoundaryFrame;  // Use temporary boundary
+          seg.endFrame = note.getEndFrame();
+        } else {
+          seg.startFrame = note.getStartFrame();
+          seg.endFrame = note.getEndFrame();
+        }
+        
         seg.midiNote = static_cast<float>(note.getMidiNote()) 
                      + note.getPitchOffset()
                      - (note.getTiltLeft() + note.getTiltRight()) / 2.0f;

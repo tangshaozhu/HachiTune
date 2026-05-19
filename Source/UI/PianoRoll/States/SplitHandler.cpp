@@ -12,22 +12,48 @@ bool SplitHandler::mouseDown(const juce::MouseEvent &e, float worldX,
                              float worldY) {
   juce::ignoreUnused(e, worldY);
 
-  // If near a boundary and not already dragging, check for drag start
-  if (isNearBoundary_ && !isDraggingBoundary) {
-    Note* leftNote = getBoundaryLeftNote();
-    Note* rightNote = getBoundaryRightNote();
+  // Debug: Track mouseDown entry
+  static int mouseDownCount = 0;
+  if (mouseDownCount < 5) {
+    DBG("MOUSEDOWN #" << mouseDownCount++ 
+        << ": worldX=" << worldX
+        << ", isNearBoundary_=" << (isNearBoundary_ ? "true" : "false"));
+  }
+
+  // Check if we're near a note boundary for merging (don't rely on isNearBoundary_ from mouseMove)
+  float boundaryX = -1.0f;
+  Note* boundaryNote = owner_.noteSplitter->findNoteBoundaryAt(worldX, worldY, boundaryX);
+  
+  if (boundaryNote && !isDraggingBoundary) {
+    DBG("MOUSEDOWN: Found boundary at X=" << boundaryX << ", leftNote=" << boundaryNote->getStartFrame() << "-" << boundaryNote->getEndFrame());
     
-    if (leftNote && rightNote) {
+    Note* leftNote = boundaryNote;
+    
+    // Find the right note
+    auto& notes = owner_.project->getNotes();
+    Note* rightNote = nullptr;
+    for (auto& n : notes) {
+      if (!n.isRest() && n.getStartFrame() == leftNote->getEndFrame()) {
+        rightNote = &n;
+        break;
+      }
+    }
+    
+    if (rightNote) {
       // Calculate boundary X in world coordinates
       float pixelsPerSecond = owner_.getPixelsPerSecond();
       float leftEndX = framesToSeconds(leftNote->getEndFrame()) * pixelsPerSecond;
       float rightStartX = framesToSeconds(rightNote->getStartFrame()) * pixelsPerSecond;
-      float boundaryX = (leftEndX + rightStartX) / 2.0f;
+      float calcBoundaryX = (leftEndX + rightStartX) / 2.0f;
+      
+      DBG("MOUSEDOWN: worldX=" << worldX << ", calcBoundaryX=" << calcBoundaryX 
+          << ", diff=" << std::abs(worldX - calcBoundaryX));
       
       // Check if mouse is close enough to the boundary to start dragging
-      if (std::abs(worldX - boundaryX) < 8.0f) {
+      if (std::abs(worldX - calcBoundaryX) < 8.0f) {
+        DBG("MOUSEDOWN: Starting drag!");
         isDraggingBoundary = true;
-        dragBoundaryX = boundaryX;
+        dragBoundaryX = calcBoundaryX;
         dragInitialFrame = leftNote->getEndFrame(); // This is the initial boundary frame
         dragLeftNote = leftNote;
         dragRightNote = rightNote;
@@ -53,6 +79,9 @@ bool SplitHandler::mouseDown(const juce::MouseEvent &e, float worldX,
         dragMinX = framesToSeconds(dragMinFrame) * pixelsPerSecond;
         dragMaxX = framesToSeconds(dragMaxFrame) * pixelsPerSecond;
         
+        // Trigger repaint immediately so first render sees the dragging state
+        owner_.repaint();
+        
         return true;
       }
     }
@@ -73,6 +102,16 @@ bool SplitHandler::mouseDown(const juce::MouseEvent &e, float worldX,
 bool SplitHandler::mouseDrag(const juce::MouseEvent &e, float worldX,
                             float worldY) {
   juce::ignoreUnused(e, worldY);
+  
+  // Debug: Track first mouseDrag
+  static int dragCount = 0;
+  if (dragCount < 3) {
+    DBG("MOUSEDRAG #" << dragCount++ 
+        << ": isDraggingBoundary=" << (isDraggingBoundary ? "true" : "false")
+        << ", dragBoundaryX=" << dragBoundaryX
+        << ", dragLeftNote=" << (dragLeftNote ? "valid" : "nullptr")
+        << ", dragRightNote=" << (dragRightNote ? "valid" : "nullptr"));
+  }
   
   if (!isDraggingBoundary || !dragLeftNote || !dragRightNote) {
     return false;
