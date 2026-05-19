@@ -471,8 +471,6 @@ void IncrementalSynthesizer::synthesizeRegion(ProgressCallback onProgress,
               // If more than 5% of the body is zero, discard the synthWaveform
               const float zeroRatio = static_cast<float>(zeroCount) / static_cast<float>(noteSamples);
               if (zeroRatio > 0.05f) {
-                DBG("Discarding synthWaveform for note [" << noteStart << "-" << noteEnd 
-                   << "] due to " << (zeroRatio * 100) << "% zero samples");
                 note.clearSynthWaveform();  // This will make composeGlobalWaveform skip it
               }
             }

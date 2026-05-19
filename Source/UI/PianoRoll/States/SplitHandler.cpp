@@ -12,20 +12,12 @@ bool SplitHandler::mouseDown(const juce::MouseEvent &e, float worldX,
                              float worldY) {
   juce::ignoreUnused(e, worldY);
 
-  // Debug: Track mouseDown entry
-  static int mouseDownCount = 0;
-  if (mouseDownCount < 5) {
-    DBG("MOUSEDOWN #" << mouseDownCount++ 
-        << ": worldX=" << worldX
-        << ", isNearBoundary_=" << (isNearBoundary_ ? "true" : "false"));
-  }
-
   // Check if we're near a note boundary for merging (don't rely on isNearBoundary_ from mouseMove)
   float boundaryX = -1.0f;
   Note* boundaryNote = owner_.noteSplitter->findNoteBoundaryAt(worldX, worldY, boundaryX);
   
   if (boundaryNote && !isDraggingBoundary) {
-    DBG("MOUSEDOWN: Found boundary at X=" << boundaryX << ", leftNote=" << boundaryNote->getStartFrame() << "-" << boundaryNote->getEndFrame());
+
     
     Note* leftNote = boundaryNote;
     
@@ -46,12 +38,11 @@ bool SplitHandler::mouseDown(const juce::MouseEvent &e, float worldX,
       float rightStartX = framesToSeconds(rightNote->getStartFrame()) * pixelsPerSecond;
       float calcBoundaryX = (leftEndX + rightStartX) / 2.0f;
       
-      DBG("MOUSEDOWN: worldX=" << worldX << ", calcBoundaryX=" << calcBoundaryX 
-          << ", diff=" << std::abs(worldX - calcBoundaryX));
+
       
       // Check if mouse is close enough to the boundary to start dragging
       if (std::abs(worldX - calcBoundaryX) < 8.0f) {
-        DBG("MOUSEDOWN: Starting drag!");
+  
         isDraggingBoundary = true;
         dragBoundaryX = calcBoundaryX;
         dragInitialFrame = leftNote->getEndFrame(); // This is the initial boundary frame
@@ -102,16 +93,6 @@ bool SplitHandler::mouseDown(const juce::MouseEvent &e, float worldX,
 bool SplitHandler::mouseDrag(const juce::MouseEvent &e, float worldX,
                             float worldY) {
   juce::ignoreUnused(e, worldY);
-  
-  // Debug: Track first mouseDrag
-  static int dragCount = 0;
-  if (dragCount < 3) {
-    DBG("MOUSEDRAG #" << dragCount++ 
-        << ": isDraggingBoundary=" << (isDraggingBoundary ? "true" : "false")
-        << ", dragBoundaryX=" << dragBoundaryX
-        << ", dragLeftNote=" << (dragLeftNote ? "valid" : "nullptr")
-        << ", dragRightNote=" << (dragRightNote ? "valid" : "nullptr"));
-  }
   
   if (!isDraggingBoundary || !dragLeftNote || !dragRightNote) {
     return false;

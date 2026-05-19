@@ -802,7 +802,6 @@ public:
             project->addNote(rightNoteSnapshot);
         } else {
             // Merged note not found or already modified - skip undo to avoid corruption
-            DBG("NoteMergeAction::undo() - Merged note not found, skipping undo to prevent data corruption");
             return;
         }
         

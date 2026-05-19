@@ -1219,16 +1219,6 @@ void PianoRollComponent::drawNotes(juce::Graphics &g, NoteRenderPass pass)
       int endSample = 0;
       const auto &clipWaveform = note.getClipWaveform();
       
-      // Debug: Track rendering entry during split drag
-      static int renderEntryCount = 0;
-      if (splitHandler_->getIsDraggingBoundary() && renderEntryCount < 20) {
-        DBG("RENDER_ENTRY #" << renderEntryCount++ 
-            << ": noteFrames=" << note.getStartFrame() << "-" << note.getEndFrame()
-            << ", hasClip=" << (!clipWaveform.empty() ? "true" : "false")
-            << ", clipSize=" << clipWaveform.size()
-            << ", hasGlobal=" << (globalSamples ? "true" : "false"));
-      }
-      
       if (!clipWaveform.empty())
       {
         // During SplitHandler drag, create merged buffer and split by boundary
@@ -1248,16 +1238,7 @@ void PianoRollComponent::drawNotes(juce::Graphics &g, NoteRenderPass pass)
           isDragRightNote = (note.getStartFrame() == dragRightNote->getStartFrame() && 
                             note.getEndFrame() == dragRightNote->getEndFrame());
           
-          // Debug: Track match attempts during split drag
-          static int matchCheckCount = 0;
-          if (matchCheckCount < 20 && (note.getStartFrame() >= 230 && note.getStartFrame() <= 280)) {
-            DBG("MATCH_CHECK #" << matchCheckCount++ 
-                << ": note=" << note.getStartFrame() << "-" << note.getEndFrame()
-                << ", left=" << dragLeftNote->getStartFrame() << "-" << dragLeftNote->getEndFrame()
-                << ", right=" << dragRightNote->getStartFrame() << "-" << dragRightNote->getEndFrame()
-                << ", isLeft=" << (isDragLeftNote ? "true" : "false")
-                << ", isRight=" << (isDragRightNote ? "true" : "false"));
-          }
+
         }
         
         if (isSplitDragging && dragBoundaryX >= 0.0f && (isDragLeftNote || isDragRightNote)) {
