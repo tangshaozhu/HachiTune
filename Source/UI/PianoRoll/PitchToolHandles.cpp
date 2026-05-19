@@ -55,12 +55,14 @@ void PitchToolHandles::updateHandles(const std::vector<Note*>& selectedNotes,
   float centerX = (leftX + rightX) * 0.5f;
   float centerY = (topY + bottomY) * 0.5f;
 
-  // Add Handles
-  // 1. Tilt Left: Left edge, vertically centered
-  addHandle(HandleType::TiltLeft, leftX, centerY);
+  // Add Handles - Modified to place tilt anchors above the note for better UX
+  // Vertical position aligned with Reduce Variance handle (top edge)
+  
+  // 1. Tilt Left: Left edge, aligned with top of note box
+  addHandle(HandleType::TiltLeft, leftX, topY);
 
-  // 2. Tilt Right: Right edge, vertically centered
-  addHandle(HandleType::TiltRight, rightX, centerY);
+  // 2. Tilt Right: Right edge, aligned with top of note box
+  addHandle(HandleType::TiltRight, rightX, topY);
 
   // 3. Reduce Variance: Top edge, horizontally centered
   addHandle(HandleType::ReduceVariance, centerX, topY);

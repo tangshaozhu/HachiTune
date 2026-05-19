@@ -37,6 +37,98 @@ std::vector<float> tiltDeltaPitch(const std::vector<float>& deltaPitch,
   return result;
 }
 
+// Cubic Bezier curve tilt: uses standard cubic Bezier formula with control points on boundary vertical lines
+// P0 = (t=0, Y=0), P1 = (t=0, Y=leftOffset), P2 = (t=1, Y=rightOffset), P3 = (t=1, Y=0)
+// 
+// This matches the implementation in bezier_tilt_demo.py exactly.
+// IMPORTANT: Uses uniform X-axis sampling (not uniform parameter t) to match full_bezier.png behavior.
+// For each frame position, we numerically solve for t such that B_x(t) = target_x, then compute B_y(t).
+//
+// Behavior:
+// - Left offset only: Curve starts at leftOffset and smoothly returns to 0 at right end ↘️
+// - Right offset only: Curve starts at 0 and smoothly rises to rightOffset at right end ↗️
+// - Both offsets: Creates arch or S-shape depending on signs
+std::vector<float> splineTiltDeltaPitch(const std::vector<float>& deltaPitch,
+                                        float leftOffset,   // Y-axis offset of left control point P1 (at t=0)
+                                        float rightOffset) {  // Y-axis offset of right control point P2 (at t=1)
+  if (deltaPitch.empty()) {
+    return {};
+  }
+
+  const size_t n = deltaPitch.size();
+  std::vector<float> result(n);
+  
+  if (n == 1) {
+    // For single frame, apply both offsets equally
+    result[0] = deltaPitch[0] + leftOffset + rightOffset;
+    return result;
+  }
+
+  // Control points for cubic Bezier
+  const float P0_x = 0.0f, P0_y = 0.0f;
+  const float P1_x = 0.0f, P1_y = leftOffset;
+  const float P2_x = 1.0f, P2_y = rightOffset;
+  const float P3_x = 1.0f, P3_y = 0.0f;
+
+  // Precompute a lookup table: t -> B_x(t) with high resolution
+  constexpr int LUT_SIZE = 1000;
+  std::vector<float> lut_t(LUT_SIZE);
+  std::vector<float> lut_Bx(LUT_SIZE);
+  
+  for (int i = 0; i < LUT_SIZE; ++i) {
+    const float t = static_cast<float>(i) / static_cast<float>(LUT_SIZE - 1);
+    lut_t[i] = t;
+    // B_x(t) = (1-t)³*P0_x + 3*(1-t)²*t*P1_x + 3*(1-t)*t²*P2_x + t³*P3_x
+    const float oneMinusT = 1.0f - t;
+    lut_Bx[i] = oneMinusT * oneMinusT * oneMinusT * P0_x +
+                3.0f * oneMinusT * oneMinusT * t * P1_x +
+                3.0f * oneMinusT * t * t * P2_x +
+                t * t * t * P3_x;
+  }
+
+  // For each frame, find t such that B_x(t) = target_x using binary search on LUT
+  const float invLastIndex = 1.0f / static_cast<float>(n - 1);
+  
+  for (size_t i = 0; i < n; ++i) {
+    const float target_x = static_cast<float>(i) * invLastIndex;  // Uniform X position [0, 1]
+    
+    // Binary search in LUT to find t where B_x(t) ≈ target_x
+    int left = 0, right = LUT_SIZE - 1;
+    while (left < right - 1) {
+      const int mid = (left + right) / 2;
+      if (lut_Bx[mid] < target_x) {
+        left = mid;
+      } else {
+        right = mid;
+      }
+    }
+    
+    // Linear interpolation between left and right for more accurate t
+    const float t_left = lut_t[left];
+    const float t_right = lut_t[right];
+    const float Bx_left = lut_Bx[left];
+    const float Bx_right = lut_Bx[right];
+    
+    float t;
+    if (std::abs(Bx_right - Bx_left) > 1e-6f) {
+      t = t_left + (target_x - Bx_left) / (Bx_right - Bx_left) * (t_right - t_left);
+    } else {
+      t = (t_left + t_right) * 0.5f;
+    }
+    
+    // Now compute B_y(t) using the found t value
+    const float oneMinusT = 1.0f - t;
+    const float bezierOffset = oneMinusT * oneMinusT * oneMinusT * P0_y +
+                               3.0f * oneMinusT * oneMinusT * t * P1_y +
+                               3.0f * oneMinusT * t * t * P2_y +
+                               t * t * t * P3_y;
+    
+    result[i] = deltaPitch[i] + bezierOffset;
+  }
+
+  return result;
+}
+
 std::vector<float> reduceVariance(const std::vector<float>& deltaPitch,
                                   float factor) {
   if (deltaPitch.empty()) {
@@ -162,15 +254,11 @@ std::vector<float> applyAllTransformations(const std::vector<float>& originalDel
   // Start with the original pristine curve
   std::vector<float> result = originalDelta;
 
-  // 1. Apply tilt transformations (combined left + right)
-  // TiltLeft: pivot at right (1.0), negative amount
-  if (std::abs(tiltLeft) > 0.001f) {
-    result = tiltDeltaPitch(result, 1.0f, -tiltLeft);
-  }
-  
-  // TiltRight: pivot at left (0.0), positive amount
-  if (std::abs(tiltRight) > 0.001f) {
-    result = tiltDeltaPitch(result, 0.0f, tiltRight);
+  // 1. Apply cubic Bezier tilt transformation (replaces linear tilt)
+  // Using splineTiltDeltaPitch for smooth C1-continuous curves that prevent pitch discontinuities
+  // Control points: P0=(0,0), P1=(0,tiltLeft), P2=(1,tiltRight), P3=(1,0)
+  if (std::abs(tiltLeft) > 0.001f || std::abs(tiltRight) > 0.001f) {
+    result = splineTiltDeltaPitch(result, tiltLeft, tiltRight);
   }
 
   // 2. Apply variance scaling
@@ -292,4 +380,5 @@ std::vector<float> highPassFlatten(const std::vector<float>& deltapitch, float c
     
     return result;
 }
+
 } // namespace PitchToolOperations

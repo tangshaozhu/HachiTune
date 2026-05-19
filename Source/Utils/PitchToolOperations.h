@@ -16,6 +16,32 @@ std::vector<float> tiltDeltaPitch(const std::vector<float>& deltaPitch,
                                   float amount);
 
 /**
+ * Cubic Bezier curve tilt: uses standard cubic Bezier formula with control points on boundary vertical lines
+ * 
+ * Control points configuration (matching bezier_tilt_demo.py):
+ * - P0 = (t=0, Y=0)           : Left endpoint (fixed at origin)
+ * - P1 = (t=0, Y=leftOffset)  : Left control point (X fixed at 0, Y adjustable)
+ * - P2 = (t=1, Y=rightOffset) : Right control point (X fixed at 1, Y adjustable)
+ * - P3 = (t=1, Y=0)           : Right endpoint (fixed at origin)
+ * 
+ * Behavior:
+ * - Left offset only (leftOffset≠0, rightOffset=0): Curve starts at leftOffset and smoothly returns to 0 at right end ↘️
+ * - Right offset only (leftOffset=0, rightOffset≠0): Curve starts at 0 and smoothly rises to rightOffset at right end ↗️
+ * - Both offsets: Creates arch or S-shape depending on signs
+ * 
+ * This ensures C1 continuity at boundaries (offset=0 and first derivative=0 at both ends),
+ * preventing pitch discontinuities between adjacent notes.
+ * 
+ * @param deltaPitch The original delta pitch curve
+ * @param leftOffset Y-axis offset of left control point P1 (at t=0) in semitones
+ * @param rightOffset Y-axis offset of right control point P2 (at t=1) in semitones
+ * @return Transformed delta pitch curve with smooth Bezier tilt applied
+ */
+std::vector<float> splineTiltDeltaPitch(const std::vector<float>& deltaPitch,
+                                        float leftOffset,
+                                        float rightOffset);
+
+/**
  * Scales deviations from the base MIDI note (zero).
  *
  * `factor = 0` flattens to zero (base MIDI note) and `factor = 1` keeps
