@@ -134,6 +134,8 @@ MainComponent::MainComponent(bool enableAudioDevice)
   {
     pianoRoll.setStretchMode(isRipple ? StretchMode::Ripple : StretchMode::Absorb);
   };
+  // Disable stretch tool as requested by user requirement
+  toolbar.setStretchEnabled(false);
 #endif
   toolbar.onLoopToggled = [this](bool enabled)
   {

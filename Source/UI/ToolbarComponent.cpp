@@ -616,6 +616,17 @@ void ToolbarComponent::setRippleMode(bool ripple)
     rippleToggleButton.setImages(ripple ? rippleDrawable.get() : absorbDrawable.get());
     rippleToggleButton.setTooltip(ripple ? TR("toolbar.stretch_ripple") : TR("toolbar.stretch_absorb"));
 }
+
+void ToolbarComponent::setStretchEnabled(bool enabled)
+{
+    stretchModeButton.setEnabled(enabled);
+    if (!enabled) {
+        // If disabled, ensure the button appears visually disabled
+        stretchModeButton.setAlpha(0.5f); // Gray out the button
+    } else {
+        stretchModeButton.setAlpha(1.0f); // Normal appearance
+    }
+}
 #endif
 
 void ToolbarComponent::showProgress(const juce::String &message)

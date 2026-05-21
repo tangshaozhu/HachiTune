@@ -76,6 +76,7 @@ public:
     void setParametersVisible(bool visible);
 #if HACHITUNE_ENABLE_STRETCH
     void setRippleMode(bool ripple); // Update ripple toggle visual
+    void setStretchEnabled(bool enabled); // Enable/disable stretch button
 #endif
     bool isFollowPlayback() const { return followPlayback; }
     bool isLoopEnabled() const { return loopEnabled; }
