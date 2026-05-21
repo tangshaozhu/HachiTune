@@ -491,6 +491,8 @@ void Project::setTimelineSnapCycle(bool enabled)
 // ---------------------------------------------------------------------------
 void Project::composeGlobalWaveform()
 {
+    juce::ScopedNoDenormals noDenormals;
+
     auto &waveform = audioData.waveform;
     const auto &origWaveform = audioData.originalWaveform;
 

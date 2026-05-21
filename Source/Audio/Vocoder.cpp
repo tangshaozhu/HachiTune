@@ -9,6 +9,74 @@
 #include <sstream>
 #include <thread>
 
+#if defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || defined(__x86_64__)
+#include <xmmintrin.h>
+#include <pmmintrin.h>
+#define HTUNE_X86_FPU 1
+#else
+#define HTUNE_X86_FPU 0
+#endif
+
+namespace
+{
+  struct ScopedFlushDenormals
+  {
+    unsigned oldFtz = 0;
+    unsigned oldDaz = 0;
+    bool wasSet = false;
+
+    ScopedFlushDenormals()
+    {
+#if HTUNE_X86_FPU
+      oldFtz = _MM_GET_FLUSH_ZERO_MODE();
+      oldDaz = _MM_GET_DENORMALS_ZERO_MODE();
+      _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
+      _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+      wasSet = true;
+#endif
+    }
+
+    ~ScopedFlushDenormals()
+    {
+#if HTUNE_X86_FPU
+      if (wasSet)
+      {
+        _MM_SET_FLUSH_ZERO_MODE(oldFtz);
+        _MM_SET_DENORMALS_ZERO_MODE(oldDaz);
+      }
+#endif
+    }
+  };
+
+#ifdef HAVE_ONNXRUNTIME
+  OrtCustomThreadHandle ortCreateDenormalFreeThread(
+      void * /*options*/, OrtThreadWorkerFn workerFn, void *workerParam)
+  {
+#if HTUNE_X86_FPU
+    _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
+    _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+#endif
+    auto *t = new std::thread([workerFn, workerParam]() {
+#if HTUNE_X86_FPU
+      _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
+      _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+#endif
+      workerFn(workerParam);
+    });
+    return reinterpret_cast<OrtCustomThreadHandle>(t);
+  }
+
+  void ortJoinDenormalFreeThread(OrtCustomThreadHandle handle)
+  {
+    auto *t = const_cast<std::thread *>(
+        reinterpret_cast<const std::thread *>(handle));
+    if (t && t->joinable())
+      t->join();
+    delete t;
+  }
+#endif
+} // namespace
+
 namespace
 {
   constexpr float kMelMinClamp = -15.0f;
@@ -597,6 +665,8 @@ Vocoder::inferChunkLocked(const std::vector<std::vector<float>> &mel,
 
   const auto startInfer = std::chrono::high_resolution_clock::now();
 
+  ScopedFlushDenormals flushDenormals;
+
   Ort::Value *outputTensor = nullptr;
   std::vector<Ort::Value> ioBoundOutputs;
   static const Ort::RunOptions runOptions{nullptr};
@@ -853,6 +923,12 @@ Ort::SessionOptions Vocoder::createSessionOptions()
 
   // Enable CPU memory arena
   sessionOptions.EnableCpuMemArena();
+
+  // Install custom thread hooks so every ONNX worker thread has FTZ+DAZ
+  // enabled, preventing denormalized floats that cause zero-crossing
+  // spikes in PC-NSF-HiFiGAN output.
+  sessionOptions.SetCustomCreateThreadFn(ortCreateDenormalFreeThread);
+  sessionOptions.SetCustomJoinThreadFn(ortJoinDenormalFreeThread);
 
   // GPU-backed providers generally run best with minimal ORT CPU thread pools.
   if (executionDevice != "CPU")

@@ -143,6 +143,8 @@ std::vector<float> VolumeEnvelopeCompensator::compensateVolume(
     int smoothWindowSize,
     EnvelopeType envelopeType)
 {
+    juce::ScopedNoDenormals noDenormals;
+
     if (originalAudio.empty() || processedAudio.empty()) {
         return processedAudio;
     }

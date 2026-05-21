@@ -270,6 +270,8 @@ void IncrementalSynthesizer::synthesizeRegion(ProgressCallback onProgress,
                      capturedStartFrame, capturedEndFrame, hopSize,
                      currentJobId, onComplete, blendMask, originalSegment,
                      synthesizedAudio = std::move(synthesizedAudio)]() mutable {
+          juce::ScopedNoDenormals noDenormals;
+
           if (currentJobId != jobId.load())
             return;
           if (capturedCancelFlag->load()) {
