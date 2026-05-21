@@ -12,6 +12,11 @@ bool SplitHandler::mouseDown(const juce::MouseEvent &e, float worldX,
                              float worldY) {
   juce::ignoreUnused(e, worldY);
 
+  // Safety check: ensure project and noteSplitter are valid
+  if (!owner_.project || !owner_.noteSplitter) {
+    return false;
+  }
+
   // Check if we're near a note boundary for merging (don't rely on isNearBoundary_ from mouseMove)
   float boundaryX = -1.0f;
   Note* boundaryNote = owner_.noteSplitter->findNoteBoundaryAt(worldX, worldY, boundaryX);
@@ -113,6 +118,14 @@ bool SplitHandler::mouseUp(const juce::MouseEvent &e, float worldX,
   
   if (!isDraggingBoundary || !dragLeftNote || !dragRightNote) {
     isDraggingBoundary = false;
+    return false;
+  }
+  
+  // Safety check: ensure project is valid
+  if (!owner_.project) {
+    isDraggingBoundary = false;
+    dragLeftNote = nullptr;
+    dragRightNote = nullptr;
     return false;
   }
   
@@ -396,7 +409,7 @@ void SplitHandler::mouseMove(const juce::MouseEvent &e, float worldX,
                              float worldY) {
   juce::ignoreUnused(e);
 
-  if (!owner_.project) {
+  if (!owner_.project || !owner_.noteSplitter) {
     clearGuide();
     return;
   }
