@@ -1,4 +1,5 @@
 #include "RealtimePitchProcessor.h"
+#include "../Utils/VolumeEnvelopeCompensator.h"
 #include <algorithm>
 #include <cmath>
 
@@ -246,6 +247,36 @@ void RealtimePitchProcessor::computeInBackground() {
   if (cancelCompute.load() || synthesized.empty()) {
     computing = false;
     return;
+  }
+
+  // Apply volume compensation to maintain consistent loudness after model inference
+  // This addresses the issue where pc_nsf_hifigan changes the volume characteristics
+  if (proj) {
+    auto &audioData = proj->getAudioData();
+    const auto& originalWaveform = audioData.originalWaveform.getNumSamples() > 0 
+                                  ? audioData.originalWaveform 
+                                  : audioData.waveform;
+    
+    if (originalWaveform.getNumSamples() > 0) {
+      // Get corresponding segment of original audio for compensation
+      std::vector<float> originalSegment(synthesized.size());
+      const float* originalPtr = originalWaveform.getReadPointer(0);
+      int copySize = std::min(static_cast<int>(synthesized.size()), 
+                             originalWaveform.getNumSamples());
+      
+      for (int i = 0; i < copySize; ++i) {
+        originalSegment[i] = originalPtr[i];
+      }
+      
+      // Apply volume compensation
+        std::vector<float> compensatedSynthesized = 
+            VolumeEnvelopeCompensator::compensateVolume(
+                originalSegment, 
+                synthesized
+            );
+      
+      synthesized = std::move(compensatedSynthesized);
+    }
   }
 
   // Create output buffer

@@ -345,7 +345,7 @@ bool NoteSplitter::splitNoteAtFrame(Note* note, int splitFrame) {
 }
 
 bool NoteSplitter::splitNoteAtX(Note* note, float x) {
-    if (!note || !project || !coordMapper)
+    if (!note || !coordMapper)
         return false;
 
     // Convert X coordinate to frame

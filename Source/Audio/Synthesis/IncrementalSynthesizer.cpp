@@ -1,5 +1,6 @@
 #include "IncrementalSynthesizer.h"
 #include "../../Utils/Localization.h"
+#include "../../Utils/VolumeEnvelopeCompensator.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -305,6 +306,20 @@ void IncrementalSynthesizer::synthesizeRegion(ProgressCallback onProgress,
                   [onComplete]() { onComplete(false); });
             return;
           }
+
+          // Apply volume compensation to maintain consistent loudness after model inference
+        // This addresses the issue where pc_nsf_hifigan changes the volume characteristics
+        if (!originalSegment.empty() && !synthesizedAudio.empty()) {
+            // Only apply compensation if we have both original and synthesized audio
+            std::vector<float> compensatedSynthesizedAudio = 
+                VolumeEnvelopeCompensator::compensateVolume(
+                    originalSegment, 
+                    synthesizedAudio
+                );
+            
+            // Replace synthesizedAudio with compensated version
+            synthesizedAudio = std::move(compensatedSynthesizedAudio);
+        }
 
           // Build blended target from model/original.
           std::vector<float> targetSegment(samplesToWrite, 0.0f);
