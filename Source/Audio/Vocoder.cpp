@@ -2,6 +2,7 @@
 #include "../Utils/AppLogger.h"
 #include "../Utils/Constants.h"
 #include "../Utils/PlatformPaths.h"
+#include "../Utils/SpikeSuppressor.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -84,11 +85,7 @@ namespace
   constexpr float kF0MinValid = 20.0f;
   constexpr float kF0MaxValid = 2000.0f;
 
-  // Maximum frames per single ONNX inference call.
-  // Large tensors can cause "Error in building plan" on CoreML and OOM on other
-  // providers.  512 frames ≈ 5.9 s at 44100/512 and is safe across all backends.
   constexpr size_t kMaxChunkFrames = 512;
-  // Overlap between adjacent chunks for crossfade (in frames).
   constexpr size_t kOverlapFrames = 16;
 
   bool isVerboseInferLogEnabled()
@@ -580,6 +577,8 @@ std::vector<float> Vocoder::infer(const std::vector<std::vector<float>> &mel,
     for (auto &s : waveform)
       s = std::clamp(s, -1.0f, 1.0f);
 
+    SpikeSuppressor::suppress(waveform.data(), waveform.size());
+
     if (verboseInferLog)
     {
       const auto endTotal = std::chrono::high_resolution_clock::now();
@@ -776,6 +775,8 @@ Vocoder::inferChunkLocked(const std::vector<std::vector<float>> &mel,
   {
     waveform[i] = std::clamp(outputData[i], -1.0f, 1.0f);
   }
+
+  SpikeSuppressor::suppress(waveform.data(), waveform.size());
 
   return waveform;
 }

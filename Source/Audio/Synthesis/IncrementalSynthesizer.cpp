@@ -1,5 +1,6 @@
 #include "IncrementalSynthesizer.h"
 #include "../../Utils/Localization.h"
+#include "../../Utils/SpikeSuppressor.h"
 #include "../../Utils/VolumeEnvelopeCompensator.h"
 #include <algorithm>
 #include <cmath>
@@ -495,6 +496,24 @@ void IncrementalSynthesizer::synthesizeRegion(ProgressCallback onProgress,
 
           // Compose the global waveform from per-note synthWaveforms
           capturedProject->composeGlobalWaveform();
+
+          // Suppress zero-crossing spikes in the dirty region only
+          {
+            auto &waveform = audioData.waveform;
+            const int chCount = waveform.getNumChannels();
+            const int startSmp = std::max(0, startSample - 1);
+            const int endSmp = std::min(waveform.getNumSamples(),
+                                        startSample + samplesToWrite + 1);
+            const size_t len = static_cast<size_t>(endSmp - startSmp);
+            if (len >= 3)
+            {
+              for (int ch = 0; ch < chCount; ++ch)
+              {
+                float *data = waveform.getWritePointer(ch) + startSmp;
+                SpikeSuppressor::suppress(data, len);
+              }
+            }
+          }
 
           isBusy = false;
           juce::MessageManager::callAsync(
