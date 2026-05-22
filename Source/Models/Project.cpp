@@ -203,45 +203,41 @@ std::pair<int, int> Project::getDirtyFrameRange() const
         }
         
         if (firstUnvoicedInRange >= 0) {
-            // Find the voiced segment that contains the dirty notes
-            // Strategy: expand from dirty note boundaries until hitting unvoiced regions
-            int trimmedStart = minStart;
-            int trimmedEnd = maxEnd;
+            // Dirty range spans unvoiced gaps — collect the voiced segment
+            // for EACH dirty note and return their union, so that all dirty
+            // notes get synthesized, not just the first one.
+            int trimmedStart = -1;
+            int trimmedEnd = -1;
             
-            // If we have dirty notes, use them as anchor to find the correct voiced segment
-            if (hasDirtyNotes) {
-                // Find the voiced segment containing the first dirty note
-                int anchorStart = -1;
-                int anchorEnd = -1;
-                
-                for (const auto &note : notes) {
-                    if (note.isDirty()) {
-                        // Expand backward from note start to find voiced boundary
-                        anchorStart = note.getStartFrame();
-                        while (anchorStart > 0 && audioData.voicedMask[static_cast<size_t>(anchorStart - 1)]) {
-                            --anchorStart;
-                        }
-                        
-                        // Expand forward from note end to find voiced boundary
-                        anchorEnd = note.getEndFrame();
-                        while (anchorEnd < static_cast<int>(audioData.voicedMask.size()) && 
-                               audioData.voicedMask[static_cast<size_t>(anchorEnd)]) {
-                            ++anchorEnd;
-                        }
-                        break;  // Use first dirty note as anchor
-                    }
+            for (const auto &note : notes) {
+                if (!note.isDirty()) continue;
+
+                int segStart = note.getStartFrame();
+                while (segStart > 0 &&
+                       audioData.voicedMask[static_cast<size_t>(segStart - 1)]) {
+                    --segStart;
                 }
-                
-                if (anchorStart >= 0 && anchorEnd >= 0) {
-                    // Intersect F0 dirty range with this voiced segment
-                    if (f0Start >= 0) {
-                        trimmedStart = std::max(anchorStart, f0Start);
-                        trimmedEnd = std::min(anchorEnd, f0End);
-                    } else {
-                        trimmedStart = anchorStart;
-                        trimmedEnd = anchorEnd;
-                    }
+
+                int segEnd = note.getEndFrame();
+                while (segEnd < static_cast<int>(audioData.voicedMask.size()) &&
+                       audioData.voicedMask[static_cast<size_t>(segEnd)]) {
+                    ++segEnd;
                 }
+
+                if (trimmedStart < 0 || segStart < trimmedStart)
+                    trimmedStart = segStart;
+                if (trimmedEnd < 0 || segEnd > trimmedEnd)
+                    trimmedEnd = segEnd;
+            }
+
+            if (trimmedStart >= 0 && trimmedEnd >= 0) {
+                if (f0Start >= 0) {
+                    trimmedStart = std::max(trimmedStart, f0Start);
+                    trimmedEnd = std::min(trimmedEnd, f0End);
+                }
+            } else {
+                trimmedStart = minStart;
+                trimmedEnd = maxEnd;
             }
             
             minStart = trimmedStart;
