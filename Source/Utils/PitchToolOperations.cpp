@@ -145,7 +145,7 @@ std::vector<float> reduceVariance(const std::vector<float>& deltaPitch,
   
   // Boundary width based on SMOOTH_WINDOW (0.04s = ~3.45 frames at 44100Hz/512 hop)
   // Convert time window to frame count for consistent behavior across different sample rates
-  constexpr double SMOOTH_WINDOW_SEC = 0.04;  // 40ms total window
+  constexpr double SMOOTH_WINDOW_SEC = 0.06;  // 60ms total window
   constexpr int HOP_SIZE = 512;
   constexpr int SAMPLE_RATE = 44100;
   const int smoothWindowFrames = static_cast<int>(std::round(
@@ -330,7 +330,7 @@ std::vector<float> highPassFlatten(const std::vector<float>& deltapitch, float c
         return deltapitch;
 
     const float alpha = 1.0f - cutoffRatio;
-    constexpr double SMOOTH_WINDOW_SEC = 0.04;
+    constexpr double SMOOTH_WINDOW_SEC = 0.06;
     constexpr int HOP_SIZE = 512;
     constexpr int SAMPLE_RATE = 44100;
     const int smoothWindowFrames = std::max(2, static_cast<int>(std::round(
